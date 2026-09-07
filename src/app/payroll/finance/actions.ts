@@ -17,7 +17,13 @@ import {
   resubmitWindowFor,
   reviewerUsers,
 } from "@/lib/payroll";
+import { regenerateInvoicePdf } from "@/lib/payrollInvoice";
 import {
+  computeNet,
+  formatCents,
+  MAX_PAYROLL_AMOUNT,
+  MAX_PAYROLL_AMOUNT_CENTS,
+  MAX_PAYROLL_EXPENSES,
   payrollPeriodLabel,
   isPayrollOpenFor,
   type PayrollStatus,
@@ -366,4 +372,366 @@ export async function confirmPayments(
 
   if (paid > 0) revalidatePanels();
   return { ok: true, paid, failed };
+}
+
+/**
+ * One line's new amount, as the reviewer typed it. `null` drops the line.
+ */
+export type FinanceLineEdit = { id: string; amount: number | null };
+
+export type FinanceExpenseEdit = {
+  /** An existing line to keep (its receipt survives), or null for a new one. */
+  id: string | null;
+  label: string;
+  amountCents: number;
+};
+
+export type FinanceEdit = {
+  /** Required. Goes in the audit trail and in what the filer is told. */
+  reason: string;
+  baseSalary: number;
+  expenses: FinanceExpenseEdit[];
+  bonusLines: FinanceLineEdit[];
+  fineLines: FinanceLineEdit[];
+};
+
+/**
+ * Revise a filed request's figures before paying it.
+ *
+ * The alternative was declining it back for a $5 receipt typo, which costs the
+ * filer a refile and everyone a round trip. So the reviewer can correct it in
+ * place — every line, not just the ones the filer typed — with a required
+ * reason, the filer told what changed, and the whole diff in the audit trail.
+ * It stays on this desk: an edit here does not send the request back to the
+ * lead, because finance is the last word on it and a second wait would be
+ * paid for by the person owed the money.
+ *
+ * Two lines are bound to LEDGER ROWS, and this is where that binding is kept
+ * honest — payment settles real fines and consumes real bonuses from these
+ * lines (processSubmission), so a snapshot that drifts from its source either
+ * refuses to pay or pays the wrong thing:
+ *
+ *   • A FINE line may be lowered to anything down to zero, and needs no ledger
+ *     write: payment already settles exactly the line amount against that
+ *     penalty, so a smaller line simply deducts less this month and leaves the
+ *     rest outstanding, to roll into the next snapshot like any unpaid fine.
+ *     It may NOT exceed what the fine still owes — that would settle money
+ *     that isn't owed, and processSubmission refuses it outright.
+ *   • A BONUS line is different: payment stamps the whole source bonus as paid
+ *     out regardless of the line, so paying $100 of a $300 bonus would consume
+ *     all $300 and lose $200 with no record. processSubmission already refuses
+ *     a line whose amount has drifted from its bonus, which leaves exactly one
+ *     coherent reading of "pay less than the bonus says": the bonus was worth
+ *     less. So lowering the line revises the bonus itself to match, and the
+ *     recipient is told, on the same path an admin's correction takes
+ *     (editBonus). Dropping the line instead leaves the bonus untouched and
+ *     unconsumed — it returns to the ledger and snapshots into next month.
+ */
+export async function editSubmissionAsFinance(
+  submissionId: string,
+  edit: FinanceEdit,
+): Promise<FinanceActionResult> {
+  const session = await auth();
+  if (!isPayrollOpenFor(session?.user?.email)) {
+    return fail("Payroll is closed right now.");
+  }
+  const actorId = await requireFinance(session);
+
+  const reason = edit.reason.trim().slice(0, 1000);
+  if (!reason) {
+    return fail("Say what you changed and why — the filer is told.");
+  }
+
+  const sub = await prisma.payrollSubmission.findUnique({
+    where: { id: submissionId },
+    select: {
+      id: true,
+      status: true,
+      baseSalary: true,
+      bonusesTotal: true,
+      finesTotal: true,
+      expensesTotalCents: true,
+      netTotal: true,
+      user: { select: { id: true, name: true, email: true } },
+      period: { select: { year: true, month: true } },
+      bonusLines: {
+        select: {
+          id: true,
+          amount: true,
+          note: true,
+          bonusId: true,
+          bonus: { select: { id: true, amount: true, payrollSubmissionId: true } },
+        },
+      },
+      fineLines: {
+        select: {
+          id: true,
+          amount: true,
+          type: true,
+          penaltyId: true,
+          penalty: { select: { id: true, amount: true, paidAmount: true, paidAt: true } },
+        },
+      },
+      expenses: { select: { id: true, label: true, amountCents: true } },
+    },
+  });
+  if (!sub) return fail("Request not found.");
+  // Only money still on this desk. A paid request is a record of a payment
+  // that happened, and one waiting on its lead isn't finance's to rewrite.
+  if (!PAYABLE.includes(sub.status)) {
+    return fail(
+      sub.status === "WITH_LEAD"
+        ? "That request is still with its department lead — send it back if it needs changing."
+        : "Only a request awaiting payment can be edited — reload.",
+    );
+  }
+
+  // ----- Validate every line before writing anything -----
+
+  const baseSalary = Math.round(Number(edit.baseSalary));
+  if (!Number.isFinite(baseSalary) || baseSalary < 0 || baseSalary > MAX_PAYROLL_AMOUNT) {
+    return fail("Enter a valid base salary (whole dollars).");
+  }
+
+  if (edit.expenses.length > MAX_PAYROLL_EXPENSES) {
+    return fail(`At most ${MAX_PAYROLL_EXPENSES} expense lines.`);
+  }
+  const ownExpenseIds = new Set(sub.expenses.map((e) => e.id));
+  const expenses: (FinanceExpenseEdit & { keptId: string | null })[] = [];
+  for (const [i, raw] of edit.expenses.entries()) {
+    const label = String(raw.label ?? "").trim().slice(0, 120);
+    const amountCents = Math.round(Number(raw.amountCents));
+    if (!label) return fail(`Expense ${i + 1} needs a label.`);
+    if (!Number.isFinite(amountCents) || amountCents < 0 || amountCents > MAX_PAYROLL_AMOUNT_CENTS) {
+      return fail(`Expense “${label}” needs a valid amount.`);
+    }
+    // An id is honoured only for a line that really belongs to THIS request —
+    // a forged one can't reach another person's expense (the submitPayroll
+    // rule, same reason).
+    const keptId = raw.id && ownExpenseIds.has(raw.id) ? raw.id : null;
+    expenses.push({ ...raw, label, amountCents, keptId });
+  }
+
+  const bonusEdits: { lineId: string; amount: number | null; bonusId: string | null; wasAmount: number }[] = [];
+  for (const e of edit.bonusLines) {
+    const line = sub.bonusLines.find((l) => l.id === e.id);
+    if (!line) return fail("That request changed while you were editing — reload.");
+    const amount = e.amount === null ? null : Math.round(Number(e.amount));
+    if (amount !== null && (!Number.isFinite(amount) || amount < 0)) {
+      return fail("Enter a valid bonus amount.");
+    }
+    // Raising a bonus line is not a correction to the paycheck, it is a new
+    // award — and one this action cannot make honestly, because the money has
+    // to exist on the ledger before a snapshot can pay it. Award it on /admin
+    // (or /department) and the next snapshot carries it.
+    if (amount !== null && amount > line.amount) {
+      return fail(
+        "A bonus line can't be raised here — award the extra on /admin and it lands on the next filing.",
+      );
+    }
+    if (line.bonus && line.bonus.payrollSubmissionId) {
+      return fail("One of these bonuses has already been paid out — reload.");
+    }
+    bonusEdits.push({
+      lineId: line.id,
+      amount: amount === 0 ? null : amount,
+      bonusId: line.bonusId,
+      wasAmount: line.amount,
+    });
+  }
+
+  const fineEdits: { lineId: string; amount: number | null; wasAmount: number }[] = [];
+  for (const e of edit.fineLines) {
+    const line = sub.fineLines.find((l) => l.id === e.id);
+    if (!line) return fail("That request changed while you were editing — reload.");
+    const amount = e.amount === null ? null : Math.round(Number(e.amount));
+    if (amount !== null && (!Number.isFinite(amount) || amount < 0)) {
+      return fail("Enter a valid fine amount.");
+    }
+    // Never more than the fine still owes: payment writes exactly this figure
+    // against exactly that penalty, so a larger one would settle money nobody
+    // owes — and processSubmission would refuse to pay the request at all.
+    const outstanding = line.penalty
+      ? line.penalty.amount - line.penalty.paidAmount
+      : line.amount;
+    if (amount !== null && amount > outstanding) {
+      return fail(
+        `A fine line can't exceed what the fine still owes (${formatMoney(outstanding)}).`,
+      );
+    }
+    if (line.penalty?.paidAt) {
+      return fail("One of these fines was settled outside payroll — decline the request instead.");
+    }
+    fineEdits.push({
+      lineId: line.id,
+      amount: amount === 0 ? null : amount,
+      wasAmount: line.amount,
+    });
+  }
+
+  // ----- The new figures -----
+
+  const bonusesTotal = bonusEdits.reduce((sum, b) => sum + (b.amount ?? 0), 0);
+  const finesTotal = fineEdits.reduce((sum, f) => sum + (f.amount ?? 0), 0);
+  const expensesTotalCents = expenses.reduce((sum, e) => sum + e.amountCents, 0);
+  if (expensesTotalCents > MAX_PAYROLL_AMOUNT_CENTS) {
+    return fail("Expenses total is too large.");
+  }
+  const netTotal = computeNet({
+    baseSalary,
+    bonusesTotal,
+    finesTotal,
+    expensesTotalCents,
+  });
+  if (netTotal < 0) {
+    return fail("The fine deductions exceed the rest of the request — the total can't go below zero.");
+  }
+
+  // What changed, in the filer's terms. Built before the write so it describes
+  // the move rather than the result, and empty when nothing actually moved.
+  const changes: string[] = [];
+  if (baseSalary !== sub.baseSalary) {
+    changes.push(`base salary ${formatMoney(sub.baseSalary)} → ${formatMoney(baseSalary)}`);
+  }
+  if (bonusesTotal !== sub.bonusesTotal) {
+    changes.push(`compensations ${formatMoney(sub.bonusesTotal)} → ${formatMoney(bonusesTotal)}`);
+  }
+  if (finesTotal !== sub.finesTotal) {
+    changes.push(`fine deductions ${formatMoney(sub.finesTotal)} → ${formatMoney(finesTotal)}`);
+  }
+  if (expensesTotalCents !== sub.expensesTotalCents) {
+    changes.push(
+      `expenses ${formatCents(sub.expensesTotalCents)} → ${formatCents(expensesTotalCents)}`,
+    );
+  }
+  if (changes.length === 0) return fail("Nothing changed.");
+
+  const label = payrollPeriodLabel(sub.period.year, sub.period.month);
+  const who = sub.user.name ?? sub.user.email ?? "Someone";
+  const me = await prisma.user.findUnique({
+    where: { id: actorId },
+    select: { name: true, email: true },
+  });
+  const meName = me?.name ?? me?.email ?? "Finance";
+  const summary = `${changes.join(", ")} (net ${formatMoney(sub.netTotal)} → ${formatMoney(netTotal)})`;
+
+  await prisma.$transaction(async (tx) => {
+    // Expenses: kept lines update in place so their receipt survives; the rest
+    // are replaced. (Finance never attaches a receipt — that is the filer's
+    // evidence, and a line without one says so.)
+    const keptIds = new Set(
+      expenses.map((e) => e.keptId).filter((id): id is string => id !== null),
+    );
+    const dropIds = sub.expenses.filter((e) => !keptIds.has(e.id)).map((e) => e.id);
+    if (dropIds.length > 0) {
+      await tx.payrollExpense.deleteMany({ where: { id: { in: dropIds } } });
+    }
+    for (const [i, e] of expenses.entries()) {
+      if (e.keptId) {
+        await tx.payrollExpense.update({
+          where: { id: e.keptId },
+          data: { label: e.label, amountCents: e.amountCents, position: i + 1 },
+        });
+      } else {
+        await tx.payrollExpense.create({
+          data: {
+            submissionId: sub.id,
+            label: e.label,
+            amountCents: e.amountCents,
+            position: i + 1,
+          },
+        });
+      }
+    }
+
+    // Bonus lines, and the ledger rows they are bound to (see the doc above).
+    for (const b of bonusEdits) {
+      if (b.amount === null) {
+        await tx.payrollBonusLine.delete({ where: { id: b.lineId } });
+        continue;
+      }
+      if (b.amount === b.wasAmount) continue;
+      await tx.payrollBonusLine.update({
+        where: { id: b.lineId },
+        data: { amount: b.amount },
+      });
+      if (b.bonusId) {
+        // Kept in step, or payment refuses the request ("changed amount after
+        // filing"). The recipient hears it as the bonus revision it is.
+        await tx.bonus.update({
+          where: { id: b.bonusId },
+          data: { amount: b.amount },
+        });
+        await notify(
+          tx,
+          sub.user.id,
+          "BONUS",
+          `Your ${formatMoney(b.wasAmount)} bonus was changed to ${formatMoney(b.amount)} by ${meName} — “${reason}”.`,
+        );
+      }
+    }
+
+    // Fine lines: the snapshot only. A smaller line deducts less from this
+    // paycheck and leaves the remainder owed.
+    for (const f of fineEdits) {
+      if (f.amount === null) {
+        await tx.payrollFineLine.delete({ where: { id: f.lineId } });
+      } else if (f.amount !== f.wasAmount) {
+        await tx.payrollFineLine.update({
+          where: { id: f.lineId },
+          data: { amount: f.amount },
+        });
+      }
+    }
+
+    await tx.payrollSubmission.update({
+      where: { id: sub.id },
+      data: { baseSalary, bonusesTotal, finesTotal, expensesTotalCents, netTotal },
+    });
+    // The invoice is what gets paid from and emailed, so it is rebuilt from
+    // the row rather than left describing the figures that were replaced.
+    await regenerateInvoicePdf(tx, sub.id);
+
+    // No status change — the event is here so the trail carries the revision.
+    await applyTransition(tx, {
+      submissionId: sub.id,
+      from: sub.status,
+      to: sub.status,
+      actorId,
+      note: `Revised by ${meName}: ${summary} — “${reason}”`,
+    });
+
+    await notify(
+      tx,
+      sub.user.id,
+      "PAYROLL",
+      `${meName} revised your ${label} pay request before paying it: ${summary} — “${reason}”.`,
+    );
+    await tellOtherReviewers(
+      tx,
+      `${who}'s ${label} request was revised by ${meName}: ${summary}.`,
+      [actorId, sub.user.id],
+    );
+  });
+
+  if (sub.user.email) {
+    const pdf = await prisma.payrollPdf.findUnique({
+      where: { submissionId: sub.id },
+      select: { bytes: true },
+    });
+    await sendEmail({
+      to: sub.user.email,
+      subject: `Payroll: your ${label} request was revised — ${formatMoney(netTotal)} to be paid`,
+      text:
+        `${meName} revised your ${label} pay request before paying it:\n\n${summary}\n\n“${reason}”\n\n` +
+        `The revised invoice is attached. If this isn't right, reply to ${meName} before it is paid — ` +
+        `nothing has been paid out yet.\n\n${appUrl()}/payroll\n\n— FreshWeek`,
+      attachments: pdf
+        ? [{ filename: `${who} — ${label}.pdf`, bytes: pdf.bytes }]
+        : undefined,
+    });
+  }
+
+  revalidatePanels();
+  return { ok: true };
 }

@@ -8,7 +8,7 @@ import { isAdmin } from "@/lib/admin";
 import { resolveAvatar } from "@/lib/avatar";
 import { departmentLine } from "@/lib/team";
 import { COMPANY_TIME_ZONE, formatDateTimeTz, formatYmd } from "@/lib/dates";
-import { formatMoney } from "@/lib/penalties";
+import { formatMoney, PENALTY_LABEL } from "@/lib/penalties";
 import { BackLink } from "@/app/_components/BackLink";
 import {
   canReadPayrollWhileClosed,
@@ -542,6 +542,33 @@ export default async function PayrollPanelPage({
         submissionId={s.id}
         summary={summary}
         mode={payable ? "pay" : "unstick"}
+        // Revising the figures is offered only on a row this reviewer can pay
+        // — the same establishment the Confirm button rests on. A ledger-bound
+        // line carries its own note so the reviewer edits a line they can
+        // recognise rather than an id.
+        edit={
+          payable
+            ? {
+                baseSalary: s.baseSalary,
+                bonusLines: s.bonusLines.map((l) => ({
+                  id: l.id,
+                  label: l.note ?? "Bonus",
+                  amount: l.amount,
+                })),
+                fineLines: s.fineLines.map((l) => ({
+                  id: l.id,
+                  label: l.note ?? PENALTY_LABEL[l.type],
+                  amount: l.amount,
+                })),
+                expenses: s.expenses.map((e) => ({
+                  id: e.id,
+                  label: e.label,
+                  amountCents: e.amountCents,
+                  hasReceipt: e.receipt !== null,
+                })),
+              }
+            : undefined
+        }
       >
         {detail}
       </FinanceRow>

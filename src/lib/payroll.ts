@@ -381,7 +381,11 @@ const TRANSITIONS: Record<PayrollStatus, readonly PayrollStatus[]> = {
   // in it when the stage was removed are still live money, so they keep both
   // exits and the queue offers them the same two verbs as a SUBMITTED row.
   // The send-back to SUBMITTED is gone with the desk it went back to.
-  APPROVED_BY_ADMIN: ["DECLINED", "PROCESSED"],
+  // The self-edge is finance revising the figures before paying (see
+  // editSubmissionAsFinance): the status doesn't move, but the event lands so
+  // the change is in the trail. A legacy row is still live money on the same
+  // desk, so it is editable exactly like a SUBMITTED one.
+  APPROVED_BY_ADMIN: ["APPROVED_BY_ADMIN", "DECLINED", "PROCESSED"],
   EXPIRED: [],
   PROCESSED: [],
 };

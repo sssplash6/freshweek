@@ -9,6 +9,7 @@ import { RowTick, RowTickSpacer } from "../_components/PaySelection";
 // The reviewer's moves stay in ../finance, next to the state machine they
 // drive. Only the UI moved here when the three panels merged.
 import { confirmPayment, declineSubmission } from "../finance/actions";
+import { FinanceEditModal, type FinanceEditModel } from "./FinanceEditModal";
 
 /**
  * A panel row plus the reviewer's moves — pay it, or decline it back to the
@@ -28,6 +29,10 @@ import { confirmPayment, declineSubmission } from "../finance/actions";
  *               lead's desk blocks that person from ever filing again, and
  *               this is the one exit from it.
  *
+ * `edit` is the third verb, and it only exists in "pay" mode: revising the
+ * figures before paying, instead of declining a request over a typo. Absent
+ * means the page did not offer it, so there is nothing to open.
+ *
  * There is still no `canAct` prop, and that distinction matters: /payroll/panel
  * renders this component only for the reviewer, and picks the mode from the
  * row's stage. A row can therefore never talk itself into showing a button by
@@ -43,14 +48,17 @@ export function FinanceRow({
   submissionId,
   summary,
   mode = "pay",
+  edit,
   children,
 }: {
   submissionId: string;
   summary: PanelRowSummary;
   mode?: "pay" | "unstick";
+  edit?: FinanceEditModel;
   children: ReactNode;
 }) {
   const payable = mode === "pay";
+  const [editing, setEditing] = useState(false);
   const [declining, setDeclining] = useState(false);
   const [note, setNote] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -119,6 +127,19 @@ export function FinanceRow({
                 they approve it.
               </p>
             )}
+            {payable && edit && (
+              <button
+                type="button"
+                disabled={isPending}
+                onClick={() => {
+                  setError(null);
+                  setEditing(true);
+                }}
+                className="rounded-lg border border-line px-3.5 py-2 text-sm font-semibold text-ink transition hover:bg-canvas disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                Edit figures…
+              </button>
+            )}
             <button
               type="button"
               disabled={isPending}
@@ -132,6 +153,15 @@ export function FinanceRow({
             </button>
             {error && <p className="text-xs text-red-600">{error}</p>}
           </div>
+
+          {editing && edit && (
+            <FinanceEditModal
+              submissionId={submissionId}
+              name={summary.name}
+              model={edit}
+              onClose={() => setEditing(false)}
+            />
+          )}
 
           {declining && (
             <div
