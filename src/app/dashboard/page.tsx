@@ -61,6 +61,7 @@ import {
   tashkentTodayYmd,
 } from "@/lib/dailyReportTypes";
 import { resolveAvatar } from "@/lib/avatar";
+import { celebratesOn } from "@/lib/birthdays";
 import type { Priority } from "@/lib/priority";
 import type { DayTaskCount } from "@/lib/dayTasks";
 import { GoalCard } from "./_components/GoalCard";
@@ -84,6 +85,8 @@ import { BonusNotice } from "./_components/BonusNotice";
 import { AssignedTasks } from "./_components/AssignedTasks";
 import { AssignGoalButton } from "./_components/AssignGoalButton";
 import { DailyReportPrompt } from "./_components/DailyReportPrompt";
+import { BirthdayPrompt } from "./_components/BirthdayPrompt";
+import { BirthdayBoard } from "./_components/BirthdayBoard";
 import {
   TodaysReports,
   type TodaysReportRow,
@@ -562,6 +565,40 @@ export default async function DashboardPage({
   // everyone lands, so the ask happens here as well as on /payroll.
   const needsPayoutDetails = await submissionNeedingPaymentDetails(userId);
 
+  // Whose birthday falls on the company's calendar day. The whole team is a
+  // dozen-odd rows and Prisma has no date-part filter (month/day matching
+  // would mean raw SQL), so the day is matched here — see lib/birthdays.ts for
+  // the rule, leap day included. Same population as /team: approved, named.
+  const birthdayRows = await prisma.user.findMany({
+    where: {
+      name: { not: null },
+      approvedAt: { not: null },
+      birthday: { not: null },
+    },
+    select: {
+      id: true,
+      name: true,
+      email: true,
+      avatar: true,
+      telegramUsername: true,
+      birthday: true,
+    },
+    orderBy: [{ name: "asc" }, { email: "asc" }],
+  });
+  const birthdaysToday = birthdayRows
+    .filter((u) => u.birthday && celebratesOn(toYmd(u.birthday), reportDayYmd))
+    .map((u) => {
+      const av = resolveAvatar(u.avatar, u.email ?? u.name);
+      return {
+        id: u.id,
+        name: u.name ?? u.email ?? "A teammate",
+        emoji: av.emoji,
+        bg: av.bg,
+        telegram: u.telegramUsername,
+        isYou: u.id === userId,
+      };
+    });
+
   const todayYmd = toYmd(now);
   const nowStamp = toStamp(now);
 
@@ -801,6 +838,12 @@ export default async function DashboardPage({
         />
       )}
 
+      {/* The one ask that used to be a locked door: a missing birthday sent
+          people to /onboarding instead of the dashboard, so the accounts that
+          predate the field could never be told what was wanted. They're let
+          in now and nagged here. */}
+      {profile.birthday == null && <BirthdayPrompt maxYmd={todayYmd} />}
+
       <PeriodToggle view={view} showDaily={dailyReporter || reportRecipient} />
 
       {dailyReporter && (
@@ -955,7 +998,13 @@ export default async function DashboardPage({
         />
       </div>
       <div className="mt-8 xl:hidden">
-        <WeekCalendar deadlines={deadlineDots} dayTasks={dayTaskCounts} />
+        {/* A birthday takes the calendar's slot for the day — see
+            BirthdayBoard. */}
+        {birthdaysToday.length > 0 ? (
+          <BirthdayBoard people={birthdaysToday} />
+        ) : (
+          <WeekCalendar deadlines={deadlineDots} dayTasks={dayTaskCounts} />
+        )}
       </div>
 
         <footer className="mt-10 border-t border-line pt-6">
@@ -985,7 +1034,11 @@ export default async function DashboardPage({
               <AssignedByMe items={assignedByMeViews} />
             </div>
           )}
-          <WeekCalendar deadlines={deadlineDots} dayTasks={dayTaskCounts} />
+          {birthdaysToday.length > 0 ? (
+            <BirthdayBoard people={birthdaysToday} />
+          ) : (
+            <WeekCalendar deadlines={deadlineDots} dayTasks={dayTaskCounts} />
+          )}
         </div>
       </aside>
 

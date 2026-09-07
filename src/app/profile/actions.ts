@@ -128,11 +128,14 @@ export async function leaveDepartment(departmentId: string) {
 }
 
 /**
- * Save the editable profile fields for the signed-in user. Name, work phone,
- * Telegram and birthday stay required (they gate the dashboard); LinkedIn and
- * Instagram are optional. Email is not editable — it's the Google sign-in
- * identity — and the department/role pair is org structure, managed by admins
- * on /departments rather than self-served here.
+ * Save the editable profile fields for the signed-in user. Name, work phone
+ * and Telegram stay required because they gate the dashboard (lib/profile.ts);
+ * birthday no longer gates anything but is still required here, since this
+ * form arrives with it prefilled and saving it away empty would only re-raise
+ * the dashboard nag. LinkedIn and Instagram are optional. Email is not
+ * editable — it's the Google sign-in identity — and the department/role pair
+ * is org structure, managed by admins on /departments rather than self-served
+ * here.
  */
 export async function updateProfile(
   _prev: ProfileState,

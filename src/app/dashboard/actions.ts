@@ -1191,3 +1191,42 @@ export async function moveDayTask(
   revalidatePath("/dashboard");
   return dayTasksFor(userId, task.date);
 }
+
+/**
+ * Set the signed-in user's birthday from the dashboard nag.
+ *
+ * A birthday no longer gates the app (see lib/profile.ts), so anyone who
+ * arrived without one is inside and asked here rather than shut out at
+ * /onboarding. Only ever writes the caller's own row, and only when it's still
+ * empty: the nag is not an edit surface, and a birthday that's already set
+ * belongs to /profile, where the owner can see what they're changing.
+ */
+export async function saveBirthday(ymd: string): Promise<ActionResult> {
+  return actionResult(async () => {
+    const userId = await requireUserId();
+
+    const birthday = parseYmd(ymd.trim());
+    if (!birthday) throw new ActionError("That isn't a real date.");
+    // Both ends of the range catch the same slip: a mistyped year. A date
+    // input hands over a whole date, so nothing else about it can be wrong.
+    if (birthday.getTime() > Date.now()) {
+      throw new ActionError("That's in the future — check the year.");
+    }
+    if (birthday.getUTCFullYear() < 1900) {
+      throw new ActionError("That's too long ago — check the year.");
+    }
+
+    const { count } = await prisma.user.updateMany({
+      where: { id: userId, birthday: null },
+      data: { birthday },
+    });
+    // Already set — another tab got there first. Nothing to do, and nothing
+    // the person needs to hear about: their birthday is in, which is all the
+    // prompt wanted.
+    if (count === 0) return;
+
+    revalidatePath("/dashboard");
+    revalidatePath("/profile");
+    revalidatePath("/team");
+  });
+}
