@@ -609,34 +609,118 @@ export async function addBonus(userId: string, amount: number, note: string) {
     "BONUS",
     `You received a ${formatMoney(value)} bonus${cleanNote ? ` — ${cleanNote}` : ""}.`,
   );
-  revalidatePath("/admin");
-  revalidatePath("/dashboard");
-  revalidatePath("/department");
+  revalidateBonusViews();
 }
 
-/** Remove a bonus (e.g. awarded by mistake). Admin-only. */
-export async function deleteBonus(bonusId: string) {
-  const session = await auth();
-  if (!isAdmin(session?.user?.email)) {
-    throw new Error("Not authorized");
-  }
-  const bonus = await prisma.bonus.findUnique({
-    where: { id: bonusId },
-    select: { payrollSubmissionId: true },
-  });
-  if (!bonus) return; // already gone — nothing to undo
-  // Money that already moved: a processed pay request paid this bonus out, so
-  // deleting it would erase a payment that really happened (the part-paid
-  // fine rule, mirrored).
-  if (bonus.payrollSubmissionId) {
-    throw new Error(
-      "This bonus was already paid out through payroll — it can't be deleted.",
-    );
-  }
-  await prisma.bonus.delete({ where: { id: bonusId } });
+/**
+ * Everywhere a bonus shows up. /payroll is on the list because the filing form
+ * previews the un-paid-out bonuses it will claim, so its totals move whenever
+ * one is awarded, corrected or removed.
+ */
+function revalidateBonusViews() {
   revalidatePath("/admin");
   revalidatePath("/dashboard");
   revalidatePath("/department");
+  revalidatePath("/payroll");
+}
+
+/**
+ * A bonus nobody can change any more, and why — the one guard the corrections
+ * below share. A PROCESSED pay request paid this bonus out, so the invoice is
+ * a record of money that really moved; editing or deleting it would rewrite
+ * that. (The part-paid fine rule, mirrored.)
+ *
+ * A bonus snapshotted onto a request still AWAITING payment is deliberately
+ * NOT locked. Processing re-checks every snapshotted line against the live
+ * ledger and refuses with "changed amount after filing" / "was deleted after
+ * filing" rather than paying a stale figure, so the correction surfaces as a
+ * decline-and-refile instead of a wrong payment.
+ */
+const PAID_OUT_BONUS =
+  "This bonus was already paid out through payroll — it can't be changed.";
+
+/**
+ * Correct a bonus that was awarded wrong: its amount, its note, or both.
+ *
+ * Same scope as awarding one (lib/manage.ts): admins anyone, a lead the people
+ * under them, and themselves. Whoever may create the money may fix a typo in
+ * it — sending someone to an admin over a mistyped digit was the old answer.
+ *
+ * The recipient is deliberately not editable. Moving a bonus to someone else
+ * isn't a correction, it's a different award: delete this one and give that.
+ */
+export async function editBonus(
+  bonusId: string,
+  amount: number,
+  note: string,
+) {
+  const session = await auth();
+  const bonus = await prisma.bonus.findUnique({
+    where: { id: bonusId },
+    select: {
+      userId: true,
+      amount: true,
+      note: true,
+      payrollSubmissionId: true,
+    },
+  });
+  if (!bonus) throw new Error("That bonus is gone.");
+  // Authorization is read off the bonus's OWNER rather than off whoever is
+  // asking: a lead may only touch money belonging to someone under them.
+  await requireCanManage(session, [bonus.userId], { allowSelf: true });
+  if (bonus.payrollSubmissionId) throw new Error(PAID_OUT_BONUS);
+
+  const value = Math.round(Number(amount));
+  if (!Number.isFinite(value) || value <= 0 || value > MAX_PENALTY) {
+    throw new Error("Enter a valid bonus amount.");
+  }
+  const cleanNote = note.trim().slice(0, 500) || null;
+  // Nothing actually moved — don't write an audit-less update or, worse, tell
+  // the recipient their bonus "changed" when it didn't.
+  if (value === bonus.amount && cleanNote === bonus.note) return;
+
+  await prisma.bonus.update({
+    where: { id: bonusId },
+    data: { amount: value, note: cleanNote },
+  });
+
+  // Told in the same terms they were told the first time. Money quietly
+  // rewritten under someone is how a ledger stops being trusted.
+  const message =
+    value !== bonus.amount
+      ? `Your ${formatMoney(bonus.amount)} bonus was changed to ${formatMoney(value)}${
+          cleanNote ? ` — ${cleanNote}` : ""
+        }.`
+      : cleanNote
+        ? `The note on your ${formatMoney(value)} bonus is now: ${cleanNote}`
+        : `The note on your ${formatMoney(value)} bonus was removed.`;
+  await notify(prisma, bonus.userId, "BONUS", message);
+  revalidateBonusViews();
+}
+
+/**
+ * Remove a bonus (awarded by mistake, or superseded). Same scope as awarding
+ * one — see editBonus for why that is, and PAID_OUT_BONUS for the one bonus
+ * this refuses to touch.
+ */
+export async function deleteBonus(bonusId: string) {
+  const session = await auth();
+  const bonus = await prisma.bonus.findUnique({
+    where: { id: bonusId },
+    select: { userId: true, amount: true, payrollSubmissionId: true },
+  });
+  if (!bonus) return; // already gone — nothing to undo
+  await requireCanManage(session, [bonus.userId], { allowSelf: true });
+  if (bonus.payrollSubmissionId) throw new Error(PAID_OUT_BONUS);
+
+  await prisma.bonus.delete({ where: { id: bonusId } });
+  await notify(
+    prisma,
+    bonus.userId,
+    "BONUS",
+    `Your ${formatMoney(bonus.amount)} bonus was removed.`,
+  );
+  revalidateBonusViews();
 }
 
 /**

@@ -8,10 +8,10 @@ import {
   PENALTY_CURRENCY,
 } from "@/lib/penalties";
 import { TrashIcon } from "../../dashboard/_components/icons";
+import { BonusControls } from "@/app/_components/BonusControls";
 import {
   addBonus,
   addManualPenalty,
-  deleteBonus,
   deletePenalty,
   deleteUser,
   moveUserWeekToCurrent,
@@ -54,6 +54,8 @@ export type AdminBonus = {
   amount: number;
   note: string | null;
   dateLabel: string;
+  /** Paid out through payroll — shown, but not changeable. */
+  locked: boolean;
 };
 
 export type AdminUser = {
@@ -712,7 +714,9 @@ function AddFineForm({
 
 function BonusRow({ bonus: b }: { bonus: AdminBonus }) {
   return (
-    <li className="flex items-start gap-3 py-1.5 text-sm">
+    // flex-wrap: the inline edit form takes the row's tail and needs somewhere
+    // to go on a narrow screen (see BonusControls).
+    <li className="flex flex-wrap items-start gap-3 py-1.5 text-sm">
       <span className="mt-1.5 h-2 w-2 shrink-0 rounded-full bg-green-500" />
       {/* Wraps rather than truncates — the note is the whole reason for the
           bonus, so it stays readable however long it runs. */}
@@ -724,9 +728,11 @@ function BonusRow({ bonus: b }: { bonus: AdminBonus }) {
       <span className="shrink-0 text-xs font-semibold tabular-nums text-green-700">
         +{formatMoney(b.amount)}
       </span>
-      <ConfirmDeleteButton
-        label="Remove bonus"
-        onConfirm={() => deleteBonus(b.id)}
+      <BonusControls
+        bonusId={b.id}
+        amount={b.amount}
+        note={b.note}
+        locked={b.locked}
       />
     </li>
   );

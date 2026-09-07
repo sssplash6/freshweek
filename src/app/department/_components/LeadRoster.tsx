@@ -6,6 +6,7 @@ import {
   formatMoney,
   PENALTY_CURRENCY,
 } from "@/lib/penalties";
+import { BonusControls } from "@/app/_components/BonusControls";
 import { addBonus, addManualPenalty, assignTask } from "../../admin/actions";
 
 export type LeadMember = {
@@ -34,6 +35,21 @@ export type LeadMember = {
   submittedAtLabel: string | null;
   outstanding: number;
   openTasks: number;
+  /**
+   * Their recent bonuses, newest first — listed under the Bonus panel so a
+   * lead can correct one instead of asking an admin. Only ever acted on when
+   * `canMoney` is true; the actions re-check that server-side anyway.
+   */
+  bonuses: LeadBonus[];
+};
+
+export type LeadBonus = {
+  id: string;
+  amount: number;
+  note: string | null;
+  dateLabel: string;
+  /** Paid out through payroll — listed, but not changeable. */
+  locked: boolean;
 };
 
 export type LeadDepartment = {
@@ -172,9 +188,59 @@ function MemberRow({ member: p }: { member: LeadMember }) {
         <MoneyForm kind="fine" member={p} onDone={() => setPanel(null)} />
       )}
       {panel === "bonus" && (
-        <MoneyForm kind="bonus" member={p} onDone={() => setPanel(null)} />
+        <>
+          <MoneyForm kind="bonus" member={p} onDone={() => setPanel(null)} />
+          {p.canMoney && p.bonuses.length > 0 && (
+            <BonusList bonuses={p.bonuses} name={p.name} />
+          )}
+        </>
       )}
     </li>
+  );
+}
+
+/**
+ * What this person has already been given, under the form that gives more.
+ * Each row carries the shared correction controls, so a mistyped award is
+ * fixed where it was made rather than on /admin.
+ */
+function BonusList({
+  bonuses,
+  name,
+}: {
+  bonuses: LeadBonus[];
+  name: string;
+}) {
+  return (
+    <div className="border-t border-line bg-green-50/40 px-4 pb-3">
+      <p className="pb-1 pt-2.5 text-[11px] font-semibold uppercase tracking-wide text-muted-fg">
+        {`${name}’s bonuses so far`}
+      </p>
+      <ul className="flex flex-col">
+        {bonuses.map((b) => (
+          <li
+            key={b.id}
+            className="flex flex-wrap items-center gap-2.5 border-b border-line/50 py-1.5 last:border-0"
+          >
+            <span className="shrink-0 text-xs font-semibold tabular-nums text-green-700">
+              +{formatMoney(b.amount)}
+            </span>
+            <span className="min-w-0 flex-1 break-words text-xs text-ink">
+              {b.note ?? <span className="text-muted-fg">No note</span>}
+            </span>
+            <span className="shrink-0 text-[11px] text-muted-fg">
+              {b.dateLabel}
+            </span>
+            <BonusControls
+              bonusId={b.id}
+              amount={b.amount}
+              note={b.note}
+              locked={b.locked}
+            />
+          </li>
+        ))}
+      </ul>
+    </div>
   );
 }
 

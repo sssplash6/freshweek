@@ -174,6 +174,9 @@ export default async function AdminPage({
             amount: true,
             note: true,
             createdAt: true,
+            // Set once a pay request paid it out — the row is then a record of
+            // money that moved, so the corrections lock (see editBonus).
+            payrollSubmissionId: true,
           },
         },
       },
@@ -225,6 +228,7 @@ export default async function AdminPage({
         amount: true,
         note: true,
         createdAt: true,
+        payrollSubmissionId: true,
         user: { select: { name: true, email: true } },
       },
     }),
@@ -443,6 +447,7 @@ export default async function AdminPage({
         amount: b.amount,
         note: b.note,
         dateLabel: formatDateTimeTz(b.createdAt),
+        locked: b.payrollSubmissionId !== null,
       })),
       goals: fields.goals.map((g) => ({
         id: g.id,
@@ -792,6 +797,7 @@ export default async function AdminPage({
                     note: b.note,
                     who: b.user.name ?? b.user.email ?? "—",
                     dateLabel: formatDateTimeTz(b.createdAt),
+                    locked: b.payrollSubmissionId !== null,
                   }))}
                 />
               </CollapsibleSection>

@@ -80,6 +80,20 @@ export default async function DepartmentPanelPage() {
                     where: { completedAt: null },
                     select: { id: true },
                   },
+                  // Their bonuses, so a lead can fix one they got wrong
+                  // instead of asking an admin to. Capped: the panel is for
+                  // correcting a recent award, not an audit trail.
+                  bonuses: {
+                    orderBy: { createdAt: "desc" },
+                    take: 10,
+                    select: {
+                      id: true,
+                      amount: true,
+                      note: true,
+                      createdAt: true,
+                      payrollSubmissionId: true,
+                    },
+                  },
                 },
               },
             },
@@ -166,6 +180,13 @@ export default async function DepartmentPanelPage() {
           0,
         ),
         openTasks: u.assignedTasks.length,
+        bonuses: u.bonuses.map((b) => ({
+          id: b.id,
+          amount: b.amount,
+          note: b.note,
+          dateLabel: formatDateTimeTz(b.createdAt),
+          locked: b.payrollSubmissionId !== null,
+        })),
       };
     }),
   }));
