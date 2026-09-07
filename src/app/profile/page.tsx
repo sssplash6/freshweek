@@ -74,7 +74,7 @@ export default async function ProfilePage() {
           <p className="mt-2 text-sm text-muted-fg">
             Update your details. Socials appear on{" "}
             <Link href="/team" className="font-medium text-brand hover:underline">
-              The Team
+              Team
             </Link>
             .
           </p>

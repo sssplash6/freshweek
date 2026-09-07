@@ -93,7 +93,7 @@ export function ProfileMenu({
             onClick={() => setOpen(false)}
             className="block rounded-lg px-3 py-2 text-left text-sm font-medium text-ink transition hover:bg-canvas"
           >
-            The Team
+            Team
           </Link>
           <Link
             href="/penalties"
