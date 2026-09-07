@@ -67,9 +67,9 @@ export default async function PayrollPage() {
   if (!session?.user?.id) redirect("/signin");
   await assertApproved(session.user);
   // Closed: bail before the sweeps so nothing expires or emails while shut.
-  // An admin is pointed on to the panel, the one payroll surface that stays
-  // readable while closed — this page has nothing to offer them, since there
-  // is no filing to do.
+  // Anyone who reads payroll while closed (an admin, an observer) is pointed
+  // on to the panel, the one payroll surface that stays readable — this page
+  // has nothing to offer them, since there is no filing to do.
   if (!isPayrollOpenFor(session.user.email)) {
     return (
       <PayrollComingSoon

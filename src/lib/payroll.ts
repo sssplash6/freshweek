@@ -58,13 +58,27 @@ type Db = Prisma.TransactionClient | typeof prisma;
 // Env vars ADD reviewers (the ADMIN_EMAILS convention) — handy for exercising
 // the queue as dev@freshman.academy locally, and the way to hand someone the
 // desk for a week without a deploy. PAYROLL_ADMIN_EMAILS is no longer read by
-// anything; PAYROLL_FINANCE_EMAILS is the one that still adds a reviewer.
+// anything; PAYROLL_FINANCE_EMAILS is the one that still adds a reviewer, and
+// PAYROLL_OBSERVER_EMAILS adds a reader.
 //
 // Being a global admin (lib/admin.ts) means seeing everything payroll holds —
 // the panel, the stats, the invoices — but NOT acting on a request. Deciding
 // money and administering the app stay separate, as they did before.
+//
+// The OBSERVER list below exists because that admin read was, for a while,
+// the only way to hand someone the whole payroll record — and paying for it
+// with the /admin panel (deleting users, rewriting fines, bonuses, attendance)
+// is far too much to grant somebody who only needs to read the books. So the
+// read audience gets a list of its own: an observer sees exactly what an admin
+// sees inside payroll and nothing at all outside it.
 
 const BUILT_IN_FINANCE = ["valera@freshman.academy"];
+
+/**
+ * Read-only payroll: someone who needs the whole record without administering
+ * the app or deciding money. Env var ADDS, the ADMIN_EMAILS convention.
+ */
+const BUILT_IN_PAYROLL_OBSERVERS = ["sega@freshman.academy"];
 
 function withEnvEmails(builtIn: string[], envVar: string): string[] {
   const fromEnv = (process.env[envVar] ?? "")
@@ -83,18 +97,34 @@ export function isFinance(email: string | null | undefined): boolean {
   return !!email && financeEmails().includes(email.toLowerCase());
 }
 
+/** The observer stage: who reads payroll and decides nothing in it. */
+export function payrollObserverEmails(): string[] {
+  return withEnvEmails(BUILT_IN_PAYROLL_OBSERVERS, "PAYROLL_OBSERVER_EMAILS");
+}
+
+/**
+ * An observer holds no verb anywhere — not `isFinance`'s pay/decline, not
+ * `requireSheetEditor`'s register, not the /admin panel. Everything it opens
+ * is a page it can only look at, which is why it is safe to hand out.
+ */
+export function isPayrollObserver(email: string | null | undefined): boolean {
+  return !!email && payrollObserverEmails().includes(email.toLowerCase());
+}
+
 /**
  * Who may read the whole of payroll — the panel, the stats, anyone's invoice:
- * the reviewer plus global admins. Reading is the wide door; every verb below
- * it is `isFinance` alone.
+ * the reviewer, global admins, and observers. Reading is the wide door; every
+ * verb below it is `isFinance` alone.
  */
 export function canSeeAllPayroll(email: string | null | undefined): boolean {
-  return isAdmin(email) || isFinance(email);
+  return isAdmin(email) || isFinance(email) || isPayrollObserver(email);
 }
 
 /**
  * Who keeps payroll's READ side open after payroll itself closes — the panel,
- * and the invoices and receipts a panel row links to. Global admins do.
+ * and the invoices and receipts a panel row links to. Global admins do, and so
+ * do observers: the record is the whole reason they were given payroll at all,
+ * and a reader locked out the moment the month shuts can answer nothing.
  *
  * Closing payroll (PAYROLL_CLOSED, or a restricted rollout that leaves an
  * account off PAYROLL_OPEN_TO) is about who may file and be paid. It is not
@@ -108,13 +138,14 @@ export function canSeeAllPayroll(email: string | null | undefined): boolean {
  * ../app/payroll/sheet/actions.ts, ../app/payroll/actions.ts) and refuses
  * while closed, and the panel draws no verb it cannot honour — so an admin
  * reading a shut payroll can pay nothing, decline nothing and record nothing.
+ * An observer can do none of those three with payroll wide open either.
  * The lazy sweeps are safe for the same reason: both already return early
  * while closed, so opening the panel can't expire a row or email anyone.
  */
 export function canReadPayrollWhileClosed(
   email: string | null | undefined,
 ): boolean {
-  return isAdmin(email);
+  return isAdmin(email) || isPayrollObserver(email);
 }
 
 type SessionLike = {

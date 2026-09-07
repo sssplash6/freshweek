@@ -16,8 +16,9 @@ export async function GET(
   const session = await auth();
   if (!session?.user) return new Response("Sign in required", { status: 401 });
   // Payroll off, or this account isn't in the restricted rollout yet — with
-  // the admin's read-only exception, because the panel stays open to them
-  // while closed and every row on it has to keep opening its documents.
+  // the read-only exception for payroll's readers, because the panel stays
+  // open to them while closed and every row on it has to keep opening its
+  // documents.
   if (
     !isPayrollOpenFor(session.user.email) &&
     !canReadPayrollWhileClosed(session.user.email)

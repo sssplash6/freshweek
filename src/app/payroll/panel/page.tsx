@@ -196,17 +196,19 @@ export default async function PayrollPanelPage({
   await assertApproved(session.user);
   /**
    * Closed payroll: everyone gets the coming-soon screen employees do — except
-   * a global admin, who keeps this panel as a read-only record (see
-   * canReadPayrollWhileClosed). The reviewer does NOT: paying is exactly what
-   * closing payroll stops, so a reviewer with no verbs left has nothing to be
-   * here for, and letting them in would only look like the switch had failed.
+   * a global admin or a payroll observer, who keep this panel as a read-only
+   * record (see canReadPayrollWhileClosed). The reviewer does NOT: paying is
+   * exactly what closing payroll stops, so a reviewer with no verbs left has
+   * nothing to be here for, and letting them in would only look like the
+   * switch had failed.
    */
   const payrollOpen = isPayrollOpenFor(session.user.email);
   if (!payrollOpen && !canReadPayrollWhileClosed(session.user.email)) {
     return <PayrollComingSoon />;
   }
-  // Reading the panel is for everyone who reviews money — both stages plus
-  // global admins. Acting on a row is narrower, and decided per row below.
+  // Reading the panel is for everyone who reviews money — both stages, global
+  // admins, and payroll observers, who read and nothing more. Acting on a row
+  // is narrower, and decided per row below.
   if (!canSeeAllPayroll(session.user.email)) redirect("/dashboard");
 
   /**
@@ -219,7 +221,9 @@ export default async function PayrollPanelPage({
    *   canRecord  — recording a settled figure on the register. The reviewer or
    *                a global admin, the same test `requireSheetEditor` in
    *                ../sheet/actions.ts applies: deciding a request and writing
-   *                down what settled it are different jobs.
+   *                down what settled it are different jobs. A payroll observer
+   *                is neither, so the register stays read-only for them too —
+   *                the one power they hold is opening this page.
    *
    * Both are copies of a server-side guard, for deciding what to draw. Neither
    * is the guard.
