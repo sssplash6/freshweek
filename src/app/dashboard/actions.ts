@@ -868,7 +868,7 @@ export async function startNewWeek(
   }
 
   // How late this submission is against the new week's deadlines. "late" =
-  // after Sunday 12:00; "missed" = after the Monday 11:00 meeting (flagged not
+  // after Sunday 12:00; "missed" = after the Monday meeting (flagged not
   // submitted there). Both count as a late submission for the flag/fine — but
   // only for department leads: members owe no deadline, so their weeks are
   // never stamped late (and the fine sweep skips them anyway).
@@ -914,7 +914,7 @@ export async function startNewWeek(
     // Late submissions are no longer fined here at close time. The weekly
     // deadline is enforced proactively instead (see lib/submissionFines.ts):
     // everyone who hasn't submitted by Sunday 12:00 is fined $20, escalating to
-    // $40 if still unsubmitted at the Monday 11:00 meeting — so no-shows are
+    // $40 if still unsubmitted at the Monday meeting — so no-shows are
     // caught too, not just people who eventually close late. `submittedLate`
     // above is still recorded for the admin "Late" badge.
 

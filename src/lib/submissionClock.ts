@@ -5,7 +5,7 @@
 // on the clock they actually live by: malika@freshman.academy is at GMT+8, so
 // her Sunday noon lands at 04:00 UTC — three hours before the team's.
 //
-// SUBMISSION ONLY. The Monday 11:00 meeting is one event the whole team joins
+// SUBMISSION ONLY. The Monday meeting is one event the whole team joins
 // at a single instant, so the $40 "missed the meeting" tier stays on the
 // company clock wherever the person is (see weekMeetingDeadline in
 // lib/lateness.ts). Everything meeting-shaped is deliberately untouched here.

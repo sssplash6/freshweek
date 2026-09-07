@@ -5,8 +5,11 @@
 //
 // The submission helpers take an `offsetHours` for people who read that noon on
 // another clock (lib/submissionClock.ts) and default to the company's. The
-// MEETING helpers take no such argument on purpose: the Monday 11:00 sync is one
+// MEETING helpers take no such argument on purpose: the Monday sync is one
 // event at one instant for the whole team, so it is the company clock, always.
+
+import { toYmd } from "@/lib/dates";
+import { meetingHourForMonday } from "@/lib/meetings";
 
 export const COMPANY_UTC_OFFSET_HOURS = 5; // Asia/Tashkent, no DST
 
@@ -87,16 +90,23 @@ export function weekOpensAt(
 }
 
 /**
- * The Monday 11:00 Asia/Tashkent meeting for the week beginning `weekStart`, as
- * a UTC instant. Goals still unsubmitted at this moment are flagged "not
- * submitted" at the meeting, so submitting after it is the steeper offence.
+ * The Monday meeting for the week beginning `weekStart`, as a UTC instant.
+ * Goals still unsubmitted at this moment are flagged "not submitted" at the
+ * meeting, so submitting after it is the steeper offence.
+ *
+ * The hour comes from lib/meetings.ts rather than sitting here as a literal,
+ * so the slot attendance is marked against and the instant fines are judged
+ * by can never drift apart — and so the 11:00 → 10:00 move applies from its
+ * own Monday forward instead of re-tiering weeks already decided (see
+ * MEETING_10AM_FROM_MONDAY for what that would have cost).
  *
  * No per-person clock here, deliberately: everyone joins the same call at the
  * same moment, so "you weren't in it" is one instant for the whole team.
  */
 export function weekMeetingDeadline(weekStart: Date): Date {
   const d = new Date(weekStart);
-  d.setUTCHours(11 - COMPANY_UTC_OFFSET_HOURS, 0, 0, 0); // 11:00 UZT = 06:00 UTC
+  const hour = meetingHourForMonday(toYmd(weekStart));
+  d.setUTCHours(hour - COMPANY_UTC_OFFSET_HOURS, 0, 0, 0); // 10:00 UZT = 05:00 UTC
   return d;
 }
 
@@ -116,8 +126,8 @@ export function isLateSubmission(
 
 // How late a submission was, which sets the fine tier:
 //   on-time — by Sunday 12:00 (no fine)
-//   late    — after Sunday 12:00 but by the Monday 11:00 meeting
-//   missed  — after the Monday 11:00 meeting (was flagged "not submitted" there)
+//   late    — after Sunday 12:00 but by the Monday meeting
+//   missed  — after the Monday meeting (was flagged "not submitted" there)
 export type SubmissionTiming = "on-time" | "late" | "missed";
 
 export function submissionTiming(
@@ -153,10 +163,10 @@ export type SubmissionCycle = {
   // to stay robust to dev/prod timezone differences in stored week bounds.
   weekStart: Date;
   submissionDeadline: Date; // Sunday 12:00 Tashkent, as a UTC instant
-  meetingDeadline: Date; // Monday 11:00 Tashkent, as a UTC instant
+  meetingDeadline: Date; // the Monday meeting (lib/meetings.ts), as a UTC instant
   // before  — the deadline hasn't passed yet (nothing due)
-  // late    — past Sunday 12:00, not yet the Monday 11:00 meeting ($20 tier)
-  // missed  — past the Monday 11:00 meeting ($40 tier)
+  // late    — past Sunday 12:00, not yet the Monday meeting ($20 tier)
+  // missed  — past the Monday meeting ($40 tier)
   phase: SubmissionPhase;
 };
 

@@ -195,7 +195,7 @@ export default async function DashboardPage({
         }`;
 
   // Enforce the weekly submission deadline for this person: if they've missed
-  // Sunday 12:00 (or the Monday 11:00 escalation) without submitting, this
+  // Sunday 12:00 (or the Monday meeting escalation) without submitting, this
   // issues/updates their fine so it shows on this very load. Idempotent and
   // best-effort — never block the dashboard on it.
   await reconcileSubmissionFines({ userId }).catch(() => {});

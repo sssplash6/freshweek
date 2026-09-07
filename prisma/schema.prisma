@@ -392,7 +392,9 @@ model Notification {
   @@index([userId, createdAt])
 }
 
-// A recurring team meeting (Monday 11:00 company time). One row per time slot.
+// A recurring team meeting (Monday 10:00 company time — 11:00 for weeks
+// before lib/meetings.ts's MEETING_10AM_FROM_MONDAY, which is why a row stores
+// the instant it was held at rather than deriving it). One row per time slot.
 model Meeting {
   id          String   @id @default(cuid())
   scheduledAt DateTime @unique

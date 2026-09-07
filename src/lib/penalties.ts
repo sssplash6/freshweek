@@ -14,10 +14,10 @@ export const MEETING_PENALTY_STEP = 20; // added for every further skip in a row
 export const MEETING_LATE_PENALTY = 20;
 
 /** Fine auto-applied when a week's goals are submitted after the Sunday 12:00
- * deadline but before the Monday 11:00 meeting. */
+ * deadline but before the Monday meeting. */
 export const LATE_SUBMISSION_PENALTY = 20;
 
-/** Steeper fine when goals are still unsubmitted at the Monday 11:00 meeting —
+/** Steeper fine when goals are still unsubmitted at the Monday meeting —
  * i.e. the person was flagged "not submitted" there and submitted even later. */
 export const MISSED_SUBMISSION_PENALTY = 40;
 

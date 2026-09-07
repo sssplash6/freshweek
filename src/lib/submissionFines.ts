@@ -2,7 +2,7 @@
 // eventually submit late (which let no-shows escape entirely), this reconciles
 // the current weekly cycle and fines anyone who missed the deadline:
 //   • after Sunday 12:00 (Tashkent) — $20 for goals not yet submitted
-//   • after Monday 11:00           — escalate an unpaid $20 to $40
+//   • after the Monday meeting     — escalate an unpaid $20 to $40
 // It's idempotent (at most one late-submission fine per person per cycle) so it
 // can safely run on any page load or a cron ping. People who submitted on time
 // are never fined; people who submitted late keep the $20 they earned.
@@ -10,7 +10,9 @@
 // The Sunday deadline is read on the person's own clock where they keep one
 // (lib/submissionClock.ts): "noon on Sunday" means noon where they live, so the
 // sweep runs once per clock over non-overlapping sets of people. The Monday
-// 11:00 escalation does NOT move — it's one meeting at one instant for everyone.
+// meeting escalation does NOT move — it's one meeting at one instant for
+// everyone (10:00 Tashkent, and 11:00 for weeks before lib/meetings.ts's
+// MEETING_10AM_FROM_MONDAY).
 //
 // The deadline only governs department leads (role LEAD — the ops director is
 // one), and only through a normal department: leading a mini one (Alumni
@@ -21,6 +23,8 @@
 // lib/submissionExempt.ts) are skipped the same way regardless of role.
 
 import { prisma } from "@/lib/prisma";
+import { toYmd } from "@/lib/dates";
+import { meetingHourForMonday } from "@/lib/meetings";
 import { notify } from "@/lib/notifications";
 import {
   formatMoney,
@@ -46,7 +50,17 @@ import {
 } from "@/lib/submissionExempt";
 
 const LATE_NOTE = "Goals not submitted by the Sunday 12:00 deadline";
-const MISSED_NOTE = "Goals not submitted by the Monday 11:00 meeting";
+/**
+ * The steeper note names the meeting hour it was judged against, rather than
+ * a fixed 11:00, because the meeting moved to 10:00 from 2026-09-14 (see
+ * MEETING_10AM_FROM_MONDAY) and a fine has to be able to say what it was
+ * actually measured by. Notes already written are untouched — every one of
+ * them cites the hour that applied when it was issued, which is why nothing
+ * here matches rows by their text (userId + type + createdAt does).
+ */
+function missedNote(meetingHour: number): string {
+  return `Goals not submitted by the Monday ${meetingHour}:00 meeting`;
+}
 // The 2026-08-16 trip week runs on a midnight deadline; a fine issued for
 // missing it shouldn't cite noon.
 const LATE_NOTE_TRIP =
@@ -117,6 +131,10 @@ async function reconcileClock(
   }
 
   const { submissionDeadline, meetingDeadline, phase } = cycle;
+  // The hour this cycle's meeting is actually held at, for the wording of
+  // everything below. Same source the deadline itself comes from, so a fine
+  // can never cite an hour it wasn't measured against.
+  const meetingHour = meetingHourForMonday(toYmd(cycle.weekStart));
 
   const users = await prisma.user.findMany({
     where: {
@@ -224,7 +242,11 @@ async function reconcileClock(
     const missed = amount >= MISSED_SUBMISSION_PENALTY;
     const shiftedWeek =
       submissionDeadline.getTime() === TRIP_SHIFTED_DEADLINE_TO.getTime();
-    const note = missed ? MISSED_NOTE : shiftedWeek ? LATE_NOTE_TRIP : LATE_NOTE;
+    const note = missed
+      ? missedNote(meetingHour)
+      : shiftedWeek
+        ? LATE_NOTE_TRIP
+        : LATE_NOTE;
 
     if (!existing) {
       await prisma.$transaction(async (tx) => {
@@ -247,7 +269,7 @@ async function reconcileClock(
           u.id,
           "FINE",
           missed
-            ? `You were fined ${formatMoney(amount)} for not submitting your goals by the Monday 11:00 meeting.`
+            ? `You were fined ${formatMoney(amount)} for not submitting your goals by the Monday ${meetingHour}:00 meeting.`
             : `You were fined ${formatMoney(amount)} for not submitting your goals by the Sunday ${shiftedWeek ? "midnight" : "12:00"} deadline.`,
         );
       });
@@ -270,7 +292,7 @@ async function reconcileClock(
           tx,
           u.id,
           "FINE",
-          `Your late-submission fine was raised to ${formatMoney(amount)} — goals still not submitted at the Monday 11:00 meeting.`,
+          `Your late-submission fine was raised to ${formatMoney(amount)} — goals still not submitted at the Monday ${meetingHour}:00 meeting.`,
         );
       });
     } else if (
@@ -300,7 +322,7 @@ async function reconcileClock(
           tx,
           u.id,
           "FINE",
-          `Your late-submission fine was reduced to ${formatMoney(amount)} — your goals were in before the Monday 11:00 meeting.`,
+          `Your late-submission fine was reduced to ${formatMoney(amount)} — your goals were in before the Monday ${meetingHour}:00 meeting.`,
         );
       });
     }

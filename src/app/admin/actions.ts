@@ -724,7 +724,7 @@ export async function deleteBonus(bonusId: string) {
 }
 
 /**
- * Mark a person's attendance for this week's Monday 11:00 meeting (creating the
+ * Mark a person's attendance for this week's Monday meeting (creating the
  * meeting row on first mark). Recomputes that person's escalating skip fines so
  * amounts and the consecutive-skip streak always stay correct. Admin-only.
  */
