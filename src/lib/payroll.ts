@@ -41,9 +41,15 @@ type Db = Prisma.TransactionClient | typeof prisma;
 
 // ----- Roles -----
 //
-// Payroll has two desks: the filer's DEPARTMENT LEAD, then finance (valera@).
-// A filing waits on the lead, who passes it on or sends it back; finance then
-// pays it or declines it, and cannot pay a request the lead has not passed.
+// Payroll has two desks: the filer's DEPARTMENT LEAD, then finance. A filing
+// waits on the lead, who passes it on or sends it back; finance then pays it
+// or declines it, and cannot pay a request the lead has not passed.
+//
+// Finance is a LIST, not a person (BUILT_IN_FINANCE below). Whoever is on it
+// holds the same desk: any of them can pay or decline any request, and the
+// audit log records which one did. They also see each other's decisions — a
+// decline tells the other reviewers in-app (tellOtherReviewers) precisely so
+// two people don't work the same row.
 // Who leads whom is lib/payrollApproval.ts; a filer with no lead skips
 // straight to finance.
 //
@@ -72,7 +78,10 @@ type Db = Prisma.TransactionClient | typeof prisma;
 // read audience gets a list of its own: an observer sees exactly what an admin
 // sees inside payroll and nothing at all outside it.
 
-const BUILT_IN_FINANCE = ["valera@freshman.academy"];
+const BUILT_IN_FINANCE = [
+  "valera@freshman.academy",
+  "valentina@freshman.academy",
+];
 
 /**
  * Read-only payroll: someone who needs the whole record without administering

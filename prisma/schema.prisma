@@ -715,7 +715,7 @@ model Feedback {
 //
 // WITH_LEAD is the department lead's desk: they see what their own person is
 // claiming and either pass it on or send it back. SUBMITTED then sits in the
-// reviewer's queue (valera@), who declines it back to the filer or pays it —
+// reviewer's queue (finance), who decline it back to the filer or pay it —
 // and CANNOT pay a request that has not come through the lead, which is what
 // makes the middle step a gate rather than a notification (lib/payroll.ts
 // TRANSITIONS, and ACTIONABLE in app/payroll/finance/actions.ts).
