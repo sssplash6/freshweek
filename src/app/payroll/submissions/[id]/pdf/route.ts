@@ -6,6 +6,7 @@
 import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
 import { canReadPayrollWhileClosed, canSeeAllPayroll } from "@/lib/payroll";
+import { canApprovePayroll } from "@/lib/payrollApproval";
 import { payrollPeriodLabel, isPayrollOpenFor } from "@/lib/payrollTypes";
 
 export async function GET(
@@ -41,7 +42,11 @@ export async function GET(
   // gates on, so a row visible there always has an invoice that opens.
   const allowed =
     submission.userId === session.user.id ||
-    canSeeAllPayroll(session.user.email);
+    canSeeAllPayroll(session.user.email) ||
+    // The filer's department lead, who has to approve this request before
+    // finance may pay it (lib/payrollApproval.ts). The invoice is the same
+    // request their team page already shows them, in the form they can keep.
+    (await canApprovePayroll(prisma, session.user.id, submission.userId));
   if (!allowed) return new Response("Not authorized", { status: 403 });
   if (!submission.pdf) return new Response("No invoice generated", { status: 404 });
 

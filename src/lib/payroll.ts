@@ -3,8 +3,9 @@
 // at submit time, the lazy expiry + reminder sweeps (no cron anywhere — the
 // lib/submissionFines.ts pattern), and the money write-back at PROCESSED.
 //
-//   DRAFT → SUBMITTED → (DECLINED → SUBMITTED)* → PROCESSED
-//              ↺ (filer edits)   └───────────────▶ EXPIRED
+//   DRAFT → WITH_LEAD → SUBMITTED → PROCESSED
+//              ↺ (filer edits, and an edit to an approved request comes back)
+//              └──▶ DECLINED → WITH_LEAD* ──▶ EXPIRED
 //
 // Server actions own authorization and notifications; this module owns the
 // rules — every transition goes through applyTransition so no status change
@@ -40,14 +41,19 @@ type Db = Prisma.TransactionClient | typeof prisma;
 
 // ----- Roles -----
 //
-// Payroll has ONE reviewer stage, and it is finance: a filed request goes
-// straight to valera@, who either declines it back to the filer or pays it.
+// Payroll has two desks: the filer's DEPARTMENT LEAD, then finance (valera@).
+// A filing waits on the lead, who passes it on or sends it back; finance then
+// pays it or declines it, and cannot pay a request the lead has not passed.
+// Who leads whom is lib/payrollApproval.ts; a filer with no lead skips
+// straight to finance.
 //
-// It used to pass through an admin stage (tech@/shakhzod@) that approved
-// requests onward for payment. That stage is gone: nothing waits on a second
-// desk, and no request is queued to an account that no longer reviews. What
-// the admin stage contributed — a note explaining what to fix — is the same
-// decline the reviewer still has, so nothing was lost with it.
+// The lead desk is NOT a revival of the admin stage this module used to run
+// (tech@/shakhzod@ approving requests onward). That one was removed because it
+// contributed nothing: it could only pass a request along or write a note, and
+// the note is the decline finance already had. A lead holds something neither
+// desk does — they know whether the work behind an expense or a bonus actually
+// happened on their team — which is the whole reason a second desk is worth
+// waiting on this time.
 //
 // Env vars ADD reviewers (the ADMIN_EMAILS convention) — handy for exercising
 // the queue as dev@freshman.academy locally, and the way to hand someone the
@@ -308,11 +314,28 @@ export function filingWindowStateFor(
 // ----- Status machine -----
 
 const TRANSITIONS: Record<PayrollStatus, readonly PayrollStatus[]> = {
-  DRAFT: ["SUBMITTED"],
-  // SUBMITTED → SUBMITTED is the filer editing a request nobody has acted on
-  // yet: same status, fresh snapshot, and an audit event recording the change.
-  SUBMITTED: ["SUBMITTED", "DECLINED", "PROCESSED"], // declined | paid
-  DECLINED: ["SUBMITTED", "EXPIRED"],
+  // Filing lands on the lead's desk, or on finance's when the filer has no
+  // lead to answer to (lib/payrollApproval.ts).
+  DRAFT: ["WITH_LEAD", "SUBMITTED"],
+  // The lead's desk: they pass it to finance, they or finance send it back, or
+  // the filer edits it under them (same status, fresh snapshot, audit event
+  // either way).
+  //
+  // No EXPIRED edge: nothing sweeps this desk. A request here is waiting on
+  // the LEAD, not on the filer, so a clock that runs out on it would punish
+  // the wrong person — and expiring it would be an override of the gate by
+  // the calendar. What keeps it from waiting forever is finance's decline
+  // (DECLINABLE in app/payroll/finance/actions.ts): they cannot pay a request
+  // the lead hasn't passed, but they can always send it back to the filer,
+  // whose resubmit window does expire. So there is exactly one exit from a
+  // stalled approval, it belongs to a person, and it is in the audit log.
+  WITH_LEAD: ["WITH_LEAD", "SUBMITTED", "DECLINED"],
+  // SUBMITTED → SUBMITTED is a filer editing a request that never had a lead;
+  // one that DID goes back to WITH_LEAD instead, because an edit rewrites the
+  // very numbers the lead approved and their stamp can't carry over to money
+  // they never saw.
+  SUBMITTED: ["WITH_LEAD", "SUBMITTED", "DECLINED", "PROCESSED"],
+  DECLINED: ["WITH_LEAD", "SUBMITTED", "EXPIRED"],
   // Legacy. Nothing enters this state any more — it was the admin stage's
   // hand-off to finance, and there is no admin stage. Rows that were sitting
   // in it when the stage was removed are still live money, so they keep both
@@ -323,8 +346,14 @@ const TRANSITIONS: Record<PayrollStatus, readonly PayrollStatus[]> = {
   PROCESSED: [],
 };
 
-/** The statuses that block filing another period (see PayrollSubmission docs). */
+/**
+ * The statuses that block filing another period (see PayrollSubmission docs).
+ * WITH_LEAD is one of them: a request waiting on its lead is money nobody has
+ * ruled on yet, and letting September be filed over it would put the same
+ * bonuses and fines into two snapshots — exactly what this list prevents.
+ */
 export const IN_FLIGHT_STATUSES: PayrollStatus[] = [
+  "WITH_LEAD",
   "SUBMITTED",
   "DECLINED",
   "APPROVED_BY_ADMIN",
@@ -508,7 +537,9 @@ export async function expireLapsedSubmissions(now = new Date()): Promise<void> {
 /**
  * Everyone expected to file: approved and onboarded (≥1 department seat).
  * Unlike weekly-goal expectations this is NOT lead-gated — members get paid
- * too. Department leads get no payroll powers over their members.
+ * too. A lead does now hold one payroll power over their members: approving
+ * what they file, before finance can pay it (lib/payrollApproval.ts). It is
+ * approval only — no lead files, edits, declines or pays on anyone's behalf.
  */
 export async function eligibleEmployees(db: Db = prisma) {
   return db.user.findMany({

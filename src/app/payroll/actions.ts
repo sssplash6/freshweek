@@ -19,6 +19,7 @@ import {
   pullLedgerSnapshot,
   reviewerUsers,
 } from "@/lib/payroll";
+import { approvingLeadsFor } from "@/lib/payrollApproval";
 import { renderPayrollInvoice } from "@/lib/payrollPdf";
 import { regenerateInvoicePdf } from "@/lib/payrollInvoice";
 import {
@@ -68,7 +69,9 @@ type ParsedExpense = {
  * current period. Reads the form multipart body: baseSalary, paymentMethod +
  * its details, an `expenses` JSON array, and one optional `receipt_<i>` file
  * per expense. Snapshots the ledger, computes the net, renders the invoice
- * PDF, moves the request to SUBMITTED, and tells the payroll admins.
+ * PDF, moves the request onto the desk that has to act on it next — the
+ * filer's department lead, or finance when they have no lead — and tells that
+ * desk.
  *
  * Filing and editing are only allowed inside the period's filing window;
  * refiling after a decline runs on the decline's own clock instead. See the
@@ -238,15 +241,22 @@ export async function submitPayroll(
       return fail("The resubmit window has closed — this filing rolls into next month's cycle.");
     }
     mode = "resubmit";
-  } else if (existing.status === "SUBMITTED") {
+  } else if (
+    existing.status === "SUBMITTED" ||
+    existing.status === "WITH_LEAD"
+  ) {
     // An edit rewrites the whole request, so it is a filing and lives under the
-    // same window. Either way the request stands as filed; an admin who wants
-    // it changed declines it, which opens the resubmit path above. (BEFORE is
-    // reachable for requests filed under the old whole-month rule, so it gets
-    // its own wording rather than being told the window "closed".)
+    // same window. Either way the request stands as filed; whichever desk
+    // holds it — their lead or finance — sends it back if it needs changing,
+    // which opens the resubmit path above. (BEFORE is reachable for requests
+    // filed under the old whole-month rule, so it gets its own wording rather
+    // than being told the window "closed".)
+    //
+    // Editing works the same on either desk, and lands back on the lead's
+    // either way — see `landsOn` below.
     if (filingWindow === "CLOSED") {
       return fail(
-        `Filing for ${label} closed ${formatTashkent(period.filingClosesAt)} — your request stays in review exactly as filed. If something needs changing, ask an admin to send it back.`,
+        `Filing for ${label} closed ${formatTashkent(period.filingClosesAt)} — your request stays in review exactly as filed. If something needs changing, ask your department lead (or finance) to send it back.`,
       );
     }
     if (filingWindow === "BEFORE") {
@@ -260,6 +270,31 @@ export async function submitPayroll(
       `Your ${label} request is ${PAYROLL_STATUS_LABEL[existing.status].toLowerCase()} — it can't be changed now.`,
     );
   }
+
+  // ----- Which desk does it land on? -----
+
+  /**
+   * A filing goes to the filer's department lead, and only reaches finance
+   * once that lead passes it (see lib/payrollApproval.ts for who that is, and
+   * the PayrollStatus lifecycle for why the gate exists).
+   *
+   * Every path lands here, including an edit to a request the lead has
+   * ALREADY approved: that edit rewrites the very numbers they stamped, so it
+   * goes back to them rather than carrying a stamp for money they never saw.
+   * The filer is told this in the form's result, because silently un-approving
+   * their request would look like the edit failed.
+   *
+   * A filer with nobody to approve them lands on SUBMITTED exactly as before,
+   * and the audit note says why, so a trail with no approval step in it isn't
+   * read later as a gate that was skipped.
+   */
+  const leads = await approvingLeadsFor(prisma, userId);
+  const landsOn: "WITH_LEAD" | "SUBMITTED" =
+    leads.length > 0 ? "WITH_LEAD" : "SUBMITTED";
+  const skipNote =
+    landsOn === "SUBMITTED"
+      ? "No department lead to approve this — filed straight to finance."
+      : null;
 
   // ----- Write it all atomically -----
 
@@ -290,9 +325,10 @@ export async function submitPayroll(
           );
         }
       } else {
-        // An edit must still be unreviewed and a refile must still be
-        // declined; either way a reviewer may have acted since the check above.
-        const expected = mode === "edit" ? "SUBMITTED" : "DECLINED";
+        // An edit must still be sitting on the desk it was read from and a
+        // refile must still be declined; either way a reviewer may have acted
+        // since the check above.
+        const expected = mode === "edit" ? existing!.status : "DECLINED";
         const still = await tx.payrollSubmission.findUnique({
           where: { id: existing!.id },
           select: { status: true },
@@ -337,8 +373,9 @@ export async function submitPayroll(
         await applyTransition(tx, {
           submissionId,
           from: "DRAFT",
-          to: "SUBMITTED",
+          to: landsOn,
           actorId: userId,
+          note: skipNote,
           data: { submittedAt: now, lastSubmittedAt: now },
         });
       } else {
@@ -356,13 +393,14 @@ export async function submitPayroll(
         });
         await applyTransition(tx, {
           submissionId,
-          // An edit is SUBMITTED → SUBMITTED: the status doesn't move, but the
-          // event still lands so the queue can see the request changed under
-          // it, and `submittedAt` is untouched so lateness is still judged by
-          // the original filing.
-          from: mode === "edit" ? "SUBMITTED" : "DECLINED",
-          to: "SUBMITTED",
+          // An edit on the lead's desk is WITH_LEAD → WITH_LEAD: the status
+          // doesn't move, but the event still lands so the desk can see the
+          // request changed under it. `submittedAt` is untouched on every
+          // path, so lateness is still judged by the original filing.
+          from: mode === "edit" ? existing!.status : "DECLINED",
+          to: landsOn,
           actorId: userId,
+          note: skipNote,
           data: { lastSubmittedAt: now },
         });
       }
@@ -462,12 +500,20 @@ export async function submitPayroll(
         create: { submissionId, bytes: pdfBytes },
       });
 
-      const reviewers = await reviewerUsers(tx, financeEmails());
+      // Told to the desk it actually landed on — nobody is paged about a
+      // request that isn't theirs to act on yet. Finance hears about it when
+      // the lead passes it (approveAsLead in ./team/actions.ts).
+      const audience =
+        landsOn === "WITH_LEAD"
+          ? leads.map((l) => l.id)
+          : (await reviewerUsers(tx, financeEmails())).map((r) => r.id);
       await notify(
         tx,
-        reviewers.map((r) => r.id).filter((id) => id !== userId),
+        audience.filter((id) => id !== userId),
         "PAYROLL",
-        `${me.name ?? me.email}: ${label} pay request ${NOTICE[mode].verb} — ${formatMoney(netTotal)} net.`,
+        landsOn === "WITH_LEAD"
+          ? `${me.name ?? me.email}: ${label} pay request ${NOTICE[mode].verb} — ${formatMoney(netTotal)} net. Needs your approval before finance can pay it.`
+          : `${me.name ?? me.email}: ${label} pay request ${NOTICE[mode].verb} — ${formatMoney(netTotal)} net.`,
       );
     });
   } catch (e) {
@@ -481,25 +527,38 @@ export async function submitPayroll(
 
   // Mail is a side channel — after the transaction, never inside it.
   //
-  // The invoice rides along, because with one reviewer stage THIS mail is the
-  // hand-off: the person who reads it is the person who pays, and payment
-  // works from the invoice rather than from app state. It used to be attached
-  // a stage later, when an admin approved the request onward.
+  // It goes to the desk the request landed on, with the invoice attached,
+  // because THIS mail is the hand-off: whoever reads it is whoever has to act
+  // next, and they work from the invoice rather than from app state. When the
+  // lead is that desk, finance's copy is sent a stage later — by their
+  // approval (./team/actions.ts) — so finance's inbox holds only requests it
+  // can actually pay.
   const who = me.name ?? me.email ?? "Someone";
   const pdf = await prisma.payrollPdf.findFirst({
     where: { submission: { userId, periodId: period.id } },
     select: { bytes: true },
   });
+  const recipients =
+    landsOn === "WITH_LEAD"
+      ? leads.map((l) => l.email).filter((to): to is string => !!to)
+      : financeEmails();
   await Promise.all(
-    financeEmails()
-      .filter((to) => to !== (me.email ?? "").toLowerCase())
+    recipients
+      .filter((to) => to.toLowerCase() !== (me.email ?? "").toLowerCase())
       .map((to) =>
         sendEmail({
           to,
-          subject: `Payroll: ${who} ${NOTICE[mode].subject(label)} — ${formatMoney(netTotal)} to pay`,
+          subject:
+            landsOn === "WITH_LEAD"
+              ? `Payroll: ${who} ${NOTICE[mode].subject(label)} — ${formatMoney(netTotal)} to approve`
+              : `Payroll: ${who} ${NOTICE[mode].subject(label)} — ${formatMoney(netTotal)} to pay`,
           text:
-            `${who} ${NOTICE[mode].sentence(label)} — ${formatMoney(netTotal)} net.\n\n` +
-            `The invoice is attached. Pay it, or decline it back with a note: ${appUrl()}/payroll/panel\n\n— FreshWeek`,
+            landsOn === "WITH_LEAD"
+              ? `${who} ${NOTICE[mode].sentence(label)} — ${formatMoney(netTotal)} net.\n\n` +
+                `You lead their department, so it waits on you: finance can't pay it until you approve it. ` +
+                `The invoice is attached.\n\nApprove it, or send it back with a note: ${appUrl()}/payroll/team\n\n— FreshWeek`
+              : `${who} ${NOTICE[mode].sentence(label)} — ${formatMoney(netTotal)} net.\n\n` +
+                `The invoice is attached. Pay it, or decline it back with a note: ${appUrl()}/payroll/panel\n\n— FreshWeek`,
           attachments: pdf
             ? [{ filename: `${who} — ${label}.pdf`, bytes: pdf.bytes }]
             : undefined,
@@ -509,11 +568,13 @@ export async function submitPayroll(
 
   revalidatePath("/payroll");
   revalidatePath("/payroll/panel");
+  revalidatePath("/payroll/team");
+  revalidatePath("/department");
   return { ok: true };
 }
 
 /**
- * How each filing path is announced to finance. An edit has to read
+ * How each filing path is announced to the desk it landed on. An edit has to read
  * differently from a fresh filing: the request is already sitting in their
  * queue, and what changed is the very thing they were about to pay.
  */

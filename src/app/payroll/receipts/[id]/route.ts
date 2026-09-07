@@ -1,9 +1,11 @@
 // Serves one expense receipt (bytes live in Postgres — see PayrollReceipt).
-// Same audience as the invoice PDF: the owner and the two review stages.
+// Same audience as the invoice PDF: the owner, the desks that review it (the
+// filer's department lead and finance), and global admins.
 
 import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
 import { canReadPayrollWhileClosed, canSeeAllPayroll } from "@/lib/payroll";
+import { canApprovePayroll } from "@/lib/payrollApproval";
 import { isPayrollOpenFor } from "@/lib/payrollTypes";
 
 export async function GET(
@@ -34,9 +36,17 @@ export async function GET(
   });
   if (!receipt) return new Response("Not found", { status: 404 });
 
+  // The lead has to be able to open what they are approving: a receipt is
+  // the evidence for the expense line, and an approval desk that can see the
+  // claim but not the proof is a rubber stamp.
   const allowed =
     receipt.expense.submission.userId === session.user.id ||
-    canSeeAllPayroll(session.user.email);
+    canSeeAllPayroll(session.user.email) ||
+    (await canApprovePayroll(
+      prisma,
+      session.user.id,
+      receipt.expense.submission.userId,
+    ));
   if (!allowed) return new Response("Not authorized", { status: 403 });
 
   const ascii = receipt.filename.replace(/[^\x20-\x7e]/g, "_").replace(/["\\]/g, "_");

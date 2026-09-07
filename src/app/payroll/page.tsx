@@ -239,7 +239,16 @@ export default async function PayrollPage() {
           id: current.id,
           status: current.status,
           banner:
-            current.status === "SUBMITTED"
+            current.status === "WITH_LEAD"
+              ? {
+                  tone: "border-amber-200 bg-amber-50 text-amber-800",
+                  text: `With your department lead for approval — finance sees it once they pass it on.${
+                    filingOpen
+                      ? ""
+                      : " Filing is closed, so it stands exactly as filed; your lead can send it back if something needs changing."
+                  }`,
+                }
+              : current.status === "SUBMITTED"
               ? {
                   tone: "border-brand/30 bg-brand-soft text-brand",
                   // Editing follows the filing window, so say so here rather

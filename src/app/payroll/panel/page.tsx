@@ -74,17 +74,28 @@ export const metadata: Metadata = { title: "Payroll panel" };
 const STATUS_ORDER: PayrollStatus[] = [
   "SUBMITTED",
   "APPROVED_BY_ADMIN",
+  // Waiting on someone who isn't the reviewer, so it sorts below what they
+  // can act on — but above the record, because it is money still coming.
+  "WITH_LEAD",
   "DECLINED",
   "PROCESSED",
   "EXPIRED",
 ];
 
 /**
- * What is still waiting on the reviewer, and so what a row can still be paid
- * or declined from — the panel's copy of ACTIONABLE in ../finance/actions.ts.
- * Payroll has one stage now: a filing lands on that desk as SUBMITTED, and
+ * What is still waiting on the reviewer, and so what a row can be PAID from —
+ * the panel's copy of PAYABLE in ../finance/actions.ts. A filing reaches this
+ * desk as SUBMITTED once the filer's department lead has approved it, and
  * APPROVED_BY_ADMIN is the legacy row the removed admin stage had already
- * approved. Same desk, same two verbs, one bucket everywhere on this page.
+ * approved.
+ *
+ * WITH_LEAD is deliberately absent: it is on the lead's desk, not this one,
+ * and no override pays it (see the PayrollStatus lifecycle). Such a row still
+ * draws here — finance needs to see money that is coming and who is sitting on
+ * it — it just draws without verbs. Declining one IS still possible, which is
+ * why finance's own DECLINABLE is a wider set than this; the row gets that
+ * button through the same wrapper, since a row awaiting a lead is exactly the
+ * one a reviewer may need to unstick.
  */
 const AWAITING: PayrollStatus[] = ["SUBMITTED", "APPROVED_BY_ADMIN"];
 
@@ -95,6 +106,7 @@ const AWAITING: PayrollStatus[] = ["SUBMITTED", "APPROVED_BY_ADMIN"];
  * set the stats page counts, which is what makes every total reconcile.
  */
 const COUNTABLE: PayrollStatus[] = [
+  "WITH_LEAD",
   "SUBMITTED",
   "DECLINED",
   "APPROVED_BY_ADMIN",
@@ -437,14 +449,16 @@ export default async function PayrollPanelPage({
      * nobody is waiting on it.
      */
     const waitingSince =
-      s.status === "SUBMITTED"
+      s.status === "SUBMITTED" || s.status === "WITH_LEAD"
         ? s.lastSubmittedAt
         : s.status === "APPROVED_BY_ADMIN"
           ? handedOver
           : null;
 
     const metaLine =
-      s.status === "DECLINED" && s.resubmitDeadline
+      s.status === "WITH_LEAD"
+        ? `${s.lastSubmittedAt ? `Filed ${formatDateTimeTz(s.lastSubmittedAt)} · ` : ""}waiting on their department lead`
+        : s.status === "DECLINED" && s.resubmitDeadline
         ? `Resubmit by ${formatTashkent(s.resubmitDeadline)}${s.graceDayUsed ? " · grace day" : ""}`
         : // Declined inside a held-open month, so it carries no deadline —
           // saying when it was filed instead would hide that it is waiting on
@@ -515,8 +529,16 @@ export default async function PayrollPanelPage({
      * offer and does not even pull the action module into the bundle.
      */
     const payable = AWAITING.includes(s.status) && canPay;
-    const node = payable ? (
-      <FinanceRow submissionId={s.id} summary={summary}>
+    // A request still on a lead's desk: unpayable by anyone, but the reviewer
+    // keeps the send-back, which is the only exit if that approval never
+    // comes (see FinanceRow's `mode`, and DECLINABLE in ../finance/actions).
+    const unstickable = s.status === "WITH_LEAD" && canPay;
+    const node = payable || unstickable ? (
+      <FinanceRow
+        submissionId={s.id}
+        summary={summary}
+        mode={payable ? "pay" : "unstick"}
+      >
         {detail}
       </FinanceRow>
     ) : (

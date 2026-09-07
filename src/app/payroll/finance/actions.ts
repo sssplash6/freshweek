@@ -27,16 +27,31 @@ export type FinanceActionResult = { ok: true } | { ok: false; error: string };
 const fail = (error: string): FinanceActionResult => ({ ok: false, error });
 
 /**
- * The two statuses a request can still be acted on from.
+ * What finance may PAY, and what finance may DECLINE. They are deliberately
+ * different sets, and the difference IS the lead gate.
  *
- * SUBMITTED is where every filing now lands — payroll has one reviewer stage,
- * so a request goes straight from the filer to the person who pays it.
- * APPROVED_BY_ADMIN is the legacy half: rows the removed admin stage had
- * already approved when it went away. They are the same job — unpaid money on
- * the reviewer's desk — so both verbs below take either, and the audit trail
- * keeps the distinction rather than the queue.
+ * SUBMITTED is a request the lead has passed on (or one whose filer has no
+ * lead — lib/payrollApproval.ts). APPROVED_BY_ADMIN is the legacy half: rows
+ * the removed admin stage had already approved when it went away. Both are the
+ * same job, unpaid money on the reviewer's desk, and both are payable.
+ *
+ * WITH_LEAD is not payable by anyone, ever: that is the whole point of the
+ * gate, and there is no override — a request nobody's lead has looked at
+ * cannot be paid, however senior the person asking.
+ *
+ * It IS declinable, and that asymmetry is load-bearing. A request stuck on an
+ * absent lead's desk blocks its filer from ever filing again (WITH_LEAD is in
+ * IN_FLIGHT_STATUSES), so something has to be able to move it. Sending it back
+ * to the filer is not paying it and not approving it — it returns the request
+ * to the one person who can always act on it — so finance keeps that exit
+ * while the gate itself stays absolute.
  */
-const ACTIONABLE: PayrollStatus[] = ["SUBMITTED", "APPROVED_BY_ADMIN"];
+const PAYABLE: PayrollStatus[] = ["SUBMITTED", "APPROVED_BY_ADMIN"];
+const DECLINABLE: PayrollStatus[] = [
+  "WITH_LEAD",
+  "SUBMITTED",
+  "APPROVED_BY_ADMIN",
+];
 
 /** The views a panel action changes, refreshed together. */
 function revalidatePanels() {
@@ -110,8 +125,8 @@ export async function declineSubmission(
 
   const sub = await loadForReview(submissionId);
   if (!sub) return fail("Request not found.");
-  if (!ACTIONABLE.includes(sub.status)) {
-    return fail("Only a request awaiting payment can be declined — reload.");
+  if (!DECLINABLE.includes(sub.status)) {
+    return fail("Only a request still in review can be declined — reload.");
   }
 
   const now = new Date();
@@ -197,11 +212,17 @@ async function payOne(
     return { ok: false, name: "That request", error: "Request not found." };
   }
   const who = sub.user.name ?? sub.user.email ?? "Someone";
-  if (!ACTIONABLE.includes(sub.status)) {
+  if (!PAYABLE.includes(sub.status)) {
     return {
       ok: false,
       name: who,
-      error: "Only a request awaiting payment can be confirmed — reload.",
+      // Name the gate rather than saying "reload": a WITH_LEAD row is not a
+      // stale screen, it is a request whose lead hasn't passed it yet, and
+      // "reload" would send the reviewer looking for a problem on their end.
+      error:
+        sub.status === "WITH_LEAD"
+          ? "Their department lead hasn't approved this yet — it can't be paid until they do. Send it back if it's stuck."
+          : "Only a request awaiting payment can be confirmed — reload.",
     };
   }
 

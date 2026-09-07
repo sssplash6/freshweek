@@ -98,13 +98,18 @@ export function isHeldOpenPeriod(period: {
 }
 
 /**
- * APPROVED_BY_ADMIN is legacy and nothing enters it any more: it was the admin
- * stage's hand-off to finance, and payroll has one reviewer stage now. The
- * value stays because rows and audit events still hold it, and a row left in
- * it is still unpaid money — the panel queues it beside SUBMITTED.
+ * WITH_LEAD is the department lead's desk, between the filer and finance: a
+ * request has to pass it before finance can pay anything (see the lifecycle on
+ * PayrollStatus in schema.prisma). A filer with no lead skips it.
+ *
+ * APPROVED_BY_ADMIN is legacy and nothing enters it any more: it was a removed
+ * ADMIN stage's hand-off to finance, not this one. The value stays because
+ * rows and audit events still hold it, and a row left in it is still unpaid
+ * money — the panel queues it beside SUBMITTED.
  */
 export type PayrollStatus =
   | "DRAFT"
+  | "WITH_LEAD"
   | "SUBMITTED"
   | "DECLINED"
   | "EXPIRED"
@@ -169,6 +174,10 @@ export const PAYROLL_METHODS: PayrollMethod[] = [
 /** How each status reads in the UI — phrased for the employee's point of view. */
 export const PAYROLL_STATUS_LABEL: Record<PayrollStatus, string> = {
   DRAFT: "Draft",
+  // Desk-neutral: this label is read by the filer, by the lead looking at
+  // someone else's request, and by finance. The filer's own page says "your
+  // lead" in its banner, where the second person is actually true.
+  WITH_LEAD: "With dept. lead",
   SUBMITTED: "With finance",
   DECLINED: "Declined",
   EXPIRED: "Expired",
@@ -620,6 +629,9 @@ export const RECEIPT_MIME_TYPES = [
  * app's existing chip convention (policy cards, notices). */
 export const PAYROLL_STATUS_BADGE: Record<PayrollStatus, string> = {
   DRAFT: "bg-canvas text-muted-fg",
+  // Amber: waiting on a person, which is the panel's "needs someone" colour
+  // (the assigned-task chip), not the brand's "in hand" blue.
+  WITH_LEAD: "bg-amber-50 text-amber-700",
   SUBMITTED: "bg-brand-soft text-brand",
   DECLINED: "bg-red-50 text-red-700",
   EXPIRED: "bg-canvas text-muted-fg",
@@ -628,21 +640,34 @@ export const PAYROLL_STATUS_BADGE: Record<PayrollStatus, string> = {
 };
 
 /**
- * One audit-trail row's verb, disambiguated by where it came from. The two
- * APPROVED_BY_ADMIN lines describe history only — no new event moves through
- * that status — and stay so an old trail still reads correctly.
+ * One audit-trail row's verb, disambiguated by where it came from — the same
+ * arrival reads differently depending on the desk it came from, and a trail
+ * that says "Declined" for both desks tells the filer nothing about who to
+ * talk to. The two APPROVED_BY_ADMIN lines describe history only — no new
+ * event moves through that status — and stay so an old trail still reads
+ * correctly.
  */
 export function payrollEventLabel(
   from: PayrollStatus | null,
   to: PayrollStatus,
 ): string {
+  if (to === "WITH_LEAD") {
+    if (from === "DECLINED") return "Resubmitted — with the lead";
+    if (from === "WITH_LEAD") return "Edited and resent";
+    if (from === "SUBMITTED") return "Edited — back to the lead";
+    return "Filed — with the lead";
+  }
   if (to === "SUBMITTED") {
+    if (from === "WITH_LEAD") return "Approved by the lead — sent to finance";
     if (from === "DECLINED") return "Resubmitted";
     if (from === "APPROVED_BY_ADMIN") return "Sent back by finance";
     if (from === "SUBMITTED") return "Edited and resent";
+    // No lead to answer to, so the filing landed on the finance desk itself.
     return "Filed";
   }
-  if (to === "DECLINED") return "Declined";
+  if (to === "DECLINED") {
+    return from === "WITH_LEAD" ? "Sent back by the lead" : "Declined";
+  }
   if (to === "APPROVED_BY_ADMIN") return "Approved — sent to finance";
   if (to === "PROCESSED") return "Paid out";
   if (to === "EXPIRED") return "Expired — resubmit window lapsed";

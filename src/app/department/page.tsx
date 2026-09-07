@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 import { redirect } from "next/navigation";
 
 export const metadata: Metadata = { title: "Your department" };
@@ -10,6 +11,10 @@ import { manageableUserIds } from "@/lib/manage";
 import { resolveAvatar } from "@/lib/avatar";
 import { weekPercent } from "@/lib/progress";
 import { formatDateTimeTz } from "@/lib/dates";
+import { formatMoney } from "@/lib/penalties";
+import { ensureCurrentPeriod } from "@/lib/payroll";
+import { approvableFilerIds } from "@/lib/payrollApproval";
+import { isPayrollOpenFor, payrollPeriodLabel } from "@/lib/payrollTypes";
 import { BackLink } from "@/app/_components/BackLink";
 import { LeadRoster, type LeadDepartment } from "./_components/LeadRoster";
 import { PendingSignups } from "./_components/PendingSignups";
@@ -195,6 +200,46 @@ export default async function DepartmentPanelPage() {
     departments.flatMap((d) => d.people.map((p) => p.id)),
   ).size;
 
+  /**
+   * This lead's payroll desk, in one line: what their people have claimed for
+   * the current period and how much of it is waiting on them.
+   *
+   * Scoped by lib/payrollApproval.ts, not by `departments` above — leading a
+   * mini department carries no payroll desk, so the two lists genuinely
+   * differ. Read-only here; the verbs are on /payroll/team.
+   *
+   * Skipped entirely while payroll is closed for this account: the figure
+   * would be a number nobody can act on, under a link to a coming-soon screen.
+   */
+  const payrollScope = isPayrollOpenFor(session.user.email)
+    ? await approvableFilerIds(prisma, userId)
+    : new Set<string>();
+  let teamPayroll: {
+    label: string;
+    requested: number;
+    waiting: number;
+    count: number;
+  } | null = null;
+  if (payrollScope.size > 0) {
+    const period = await ensureCurrentPeriod(prisma, new Date());
+    const rows = await prisma.payrollSubmission.findMany({
+      where: {
+        periodId: period.id,
+        userId: { in: [...payrollScope] },
+        // EXPIRED is never paid and DRAFT never really exists — the same
+        // countable set /payroll/team and the finance panel total.
+        status: { notIn: ["DRAFT", "EXPIRED"] },
+      },
+      select: { status: true, netTotal: true },
+    });
+    teamPayroll = {
+      label: payrollPeriodLabel(period.year, period.month),
+      requested: rows.reduce((sum, r) => sum + r.netTotal, 0),
+      waiting: rows.filter((r) => r.status === "WITH_LEAD").length,
+      count: rows.length,
+    };
+  }
+
   return (
     <div className="mx-auto w-full max-w-4xl flex-1 px-4 py-8">
       <header className="mb-6 flex items-start justify-between gap-4">
@@ -226,6 +271,41 @@ export default async function DepartmentPanelPage() {
             canRemove={isAdmin(session.user.email)}
           />
         </div>
+      )}
+
+      {teamPayroll && (
+        <Link
+          href="/payroll/team"
+          className={`mb-4 flex flex-wrap items-center gap-3 rounded-xl border px-4 py-3 transition ${
+            teamPayroll.waiting > 0
+              ? "border-amber-200 bg-amber-50 hover:bg-amber-100/70"
+              : "border-line bg-surface hover:bg-canvas"
+          }`}
+        >
+          <span className="min-w-0 flex-1">
+            <span className="block text-sm font-semibold text-ink">
+              {teamPayroll.waiting > 0
+                ? `${teamPayroll.waiting} pay ${
+                    teamPayroll.waiting === 1 ? "request needs" : "requests need"
+                  } your approval`
+                : `Your team's ${teamPayroll.label} pay requests`}
+            </span>
+            <span className="block text-xs text-muted-fg">
+              {teamPayroll.count === 0
+                ? `Nobody has filed for ${teamPayroll.label} yet.`
+                : `${formatMoney(teamPayroll.requested)} requested across ${
+                    teamPayroll.count
+                  } ${teamPayroll.count === 1 ? "request" : "requests"}${
+                    teamPayroll.waiting > 0
+                      ? " — finance can't pay the waiting ones until you approve"
+                      : ""
+                  }.`}
+            </span>
+          </span>
+          <span className="shrink-0 rounded-lg bg-brand px-3 py-1.5 text-xs font-semibold text-white">
+            {teamPayroll.waiting > 0 ? "Review" : "Open"}
+          </span>
+        </Link>
       )}
 
       <LeadRoster departments={departments} />

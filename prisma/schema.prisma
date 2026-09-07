@@ -705,20 +705,33 @@ model Feedback {
 
 // Lifecycle of a monthly pay request:
 //
-//   DRAFT → SUBMITTED → (DECLINED → SUBMITTED)* → PROCESSED
-//                            └───────────────▶ EXPIRED  (resubmit window lapsed)
+//   DRAFT → WITH_LEAD → SUBMITTED → PROCESSED
+//              │  ↑         │
+//              │  └─────────┘  (filer edits, or finance sends it back:
+//              │                 a changed request needs approving again)
+//              └──▶ DECLINED → WITH_LEAD*  ─▶ EXPIRED (resubmit window lapsed)
 //
-// SUBMITTED sits in the reviewer's queue (valera@), who declines it back to
-// the filer or pays it. APPROVED_BY_ADMIN is legacy: nothing enters it since
-// the admin stage it belonged to was removed, but rows and audit events still
-// hold it and such a row is still unpaid money, so it queues beside SUBMITTED
-// and takes the same two exits. The value stays in the enum for those rows.
-// PROCESSED and EXPIRED are terminal — an expired filing simply rolls into the
-// next month's cycle (its snapshot there sweeps up whatever is still unpaid).
-// Guards and side effects live in lib/payroll.ts; the UI never sets a status
-// directly.
+// WITH_LEAD is the department lead's desk: they see what their own person is
+// claiming and either pass it on or send it back. SUBMITTED then sits in the
+// reviewer's queue (valera@), who declines it back to the filer or pays it —
+// and CANNOT pay a request that has not come through the lead, which is what
+// makes the middle step a gate rather than a notification (lib/payroll.ts
+// TRANSITIONS, and ACTIONABLE in app/payroll/finance/actions.ts).
+//
+// A filer with no lead to answer to — a lead themselves, or seats only in a
+// mini department, which runs itself — files straight to SUBMITTED, with the
+// skip recorded in the audit log (lib/payrollApproval.ts).
+//
+// APPROVED_BY_ADMIN is legacy: nothing enters it since the admin stage it
+// belonged to was removed, but rows and audit events still hold it and such a
+// row is still unpaid money, so it queues beside SUBMITTED and takes the same
+// two exits. The value stays in the enum for those rows. PROCESSED and EXPIRED
+// are terminal — an expired filing simply rolls into the next month's cycle
+// (its snapshot there sweeps up whatever is still unpaid). Guards and side
+// effects live in lib/payroll.ts; the UI never sets a status directly.
 enum PayrollStatus {
   DRAFT
+  WITH_LEAD
   SUBMITTED
   DECLINED
   EXPIRED
