@@ -28,7 +28,8 @@ type Group = {
  * The goals the signed-in user has assigned to others, one dropdown per
  * person (the daily-reports accordion pattern): the header states who and how
  * much is still pending, their tasks expand in place, and each person's
- * completed pile sits behind its own disclosure. Only people who have been
+ * completed pile sits behind its own disclosure. People with pending goals come
+ * first, so the ones who are all done drop below them. Only people who have been
  * assigned something appear; renders nothing when nobody has.
  */
 export function AssignedByMe({ items }: { items: AssignedByMeItem[] }) {
@@ -55,6 +56,13 @@ export function AssignedByMe({ items }: { items: AssignedByMeItem[] }) {
     }
     (item.done ? g.done : g.pending).push(item);
   }
+
+  // Whoever still owes something sits at the top; the people who have finished
+  // everything sink to the bottom. The sort is stable, so each half keeps the
+  // order the goals came in.
+  groups.sort(
+    (a, b) => Number(b.pending.length > 0) - Number(a.pending.length > 0),
+  );
 
   const toggle = (list: string[], set: (v: string[]) => void, key: string) =>
     set(list.includes(key) ? list.filter((k) => k !== key) : [...list, key]);
