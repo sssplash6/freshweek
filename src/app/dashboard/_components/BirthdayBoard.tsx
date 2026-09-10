@@ -1,11 +1,10 @@
 /**
  * The sidebar's birthday day.
  *
- * On any day a teammate is having a birthday, this takes the calendar's slot
- * for the day (see the dashboard sidebar) — the calendar is there every other
- * day of the year, and a birthday that shows up as a quiet dot on a grid is a
- * birthday nobody notices. It comes with the one thing the moment actually
- * needs: a way to say it, straight through to their Telegram.
+ * On any day a teammate is having a birthday, this appears in the dashboard's
+ * right sidebar — and only then, because a birthday reduced to a quiet line in
+ * a list is a birthday nobody notices. It comes with the one thing the moment
+ * actually needs: a way to say it, straight through to their Telegram.
  *
  * No ages. The stored birthday is a whole date, so a year is sitting right
  * there, and publishing someone's age to the company is not what they filled

@@ -62,8 +62,6 @@ import {
 } from "@/lib/dailyReportTypes";
 import { resolveAvatar } from "@/lib/avatar";
 import { celebratesOn } from "@/lib/birthdays";
-import type { Priority } from "@/lib/priority";
-import type { DayTaskCount } from "@/lib/dayTasks";
 import { GoalCard } from "./_components/GoalCard";
 import { AddGoalCard } from "./_components/AddGoalCard";
 import { ProfileMenu } from "./_components/ProfileMenu";
@@ -75,7 +73,6 @@ import {
   WeekArchive,
   type ArchivedAssignedTask,
 } from "./_components/WeekArchive";
-import { WeekCalendar } from "./_components/WeekCalendar";
 import { WeekSubmit } from "./_components/WeekSubmit";
 import { PenaltyNotice } from "./_components/PenaltyNotice";
 import { NotificationsBell } from "./_components/NotificationsBell";
@@ -282,17 +279,6 @@ export default async function DashboardPage({
       });
   }
 
-  // Window of day-task markers to load for the calendar. It renders one month
-  // back to thirteen forward (see WeekCalendar); this is deliberately wider so
-  // the edges stay marked even when the viewer's timezone puts them on a
-  // different calendar day than the server.
-  const markerStart = new Date(
-    Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 2, 1),
-  );
-  const markerEnd = new Date(
-    Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 15, 1),
-  );
-
   const [
     period,
     members,
@@ -305,7 +291,6 @@ export default async function DashboardPage({
     recentNotifications,
     olderUnreadNotifications,
     unreadCount,
-    dayTaskRows,
   ] = await Promise.all([
       isMonth ? getOrCreateCurrentMonth(userId) : getOrCreateCurrentWeek(userId),
       prisma.user.findMany({
@@ -397,12 +382,6 @@ export default async function DashboardPage({
       // Unread notifications of any age — the bell badge counts these, so an
       // unread fine older than 48 hours doesn't silently drop off the badge.
       prisma.notification.count({ where: { userId, readAt: null } }),
-      // Just enough of each day task to mark its day in the calendar; the full
-      // list for one day is fetched when that day is opened.
-      prisma.dayTask.findMany({
-        where: { userId, date: { gte: markerStart, lt: markerEnd } },
-        select: { date: true, isDone: true },
-      }),
     ]);
 
   // The user's own fines. Only what's *still owed* drives the money block —
@@ -621,27 +600,6 @@ export default async function DashboardPage({
   const opensOnLabel = formatYmd(
     toLocalYmd(new Date(nextWeek.start.getTime() - 3 * 86_400_000)),
   );
-
-  // Open goals due on each day, keyed by "YYYY-MM-DD", as a list of their
-  // priorities (null = no flag) so the calendar can color each dot.
-  const deadlineDots: Record<string, (Priority | null)[]> = {};
-  for (const g of period.goals) {
-    if (g.deadline && !isGoalComplete(g)) {
-      const key = toYmd(g.deadline);
-      (deadlineDots[key] ??= []).push(g.priority ?? null);
-    }
-  }
-
-  // How many day tasks each day holds, and how many are still open — the
-  // calendar tints a day by this. Separate from the deadline dots above:
-  // those are goals, these are the day's own focus list.
-  const dayTaskCounts: Record<string, DayTaskCount> = {};
-  for (const t of dayTaskRows) {
-    const key = toYmd(t.date);
-    const entry = (dayTaskCounts[key] ??= { total: 0, open: 0 });
-    entry.total++;
-    if (!t.isDone) entry.open++;
-  }
 
   // Flatten to a serializable shape for the client components. Shared by the
   // current period and the editable archived week (same include payload).
@@ -981,8 +939,9 @@ export default async function DashboardPage({
         </section>
       )}
 
-      {/* Both sidebars are hidden on narrow screens (archive below lg, calendar
-          below xl); surface their content inline so nothing is lost on mobile. */}
+      {/* Both sidebars are hidden on narrow screens (archive below lg, the
+          birthday board below xl); surface their content inline so nothing is
+          lost on mobile. */}
       <div className="mt-8 lg:hidden">
         <WeekArchive
           weeks={archive}
@@ -997,15 +956,11 @@ export default async function DashboardPage({
           nowStamp={nowStamp}
         />
       </div>
-      <div className="mt-8 xl:hidden">
-        {/* A birthday takes the calendar's slot for the day — see
-            BirthdayBoard. */}
-        {birthdaysToday.length > 0 ? (
+      {birthdaysToday.length > 0 && (
+        <div className="mt-8 xl:hidden">
           <BirthdayBoard people={birthdaysToday} />
-        ) : (
-          <WeekCalendar deadlines={deadlineDots} dayTasks={dayTaskCounts} />
-        )}
-      </div>
+        </div>
+      )}
 
         <footer className="mt-10 border-t border-line pt-6">
           {isMonth ? (
@@ -1027,20 +982,20 @@ export default async function DashboardPage({
         </footer>
       </main>
 
-      <aside className="hidden w-64 shrink-0 xl:block">
-        <div className="sticky top-8">
-          {assignedByMeViews.length > 0 && (
-            <div className="mb-6">
+      {/* Mounted only when it has something to hold: an empty 16rem column
+          would sit there pulling the centred main content off to the left. */}
+      {(assignedByMeViews.length > 0 || birthdaysToday.length > 0) && (
+        <aside className="hidden w-64 shrink-0 xl:block">
+          <div className="sticky top-8 flex flex-col gap-6">
+            {assignedByMeViews.length > 0 && (
               <AssignedByMe items={assignedByMeViews} />
-            </div>
-          )}
-          {birthdaysToday.length > 0 ? (
-            <BirthdayBoard people={birthdaysToday} />
-          ) : (
-            <WeekCalendar deadlines={deadlineDots} dayTasks={dayTaskCounts} />
-          )}
-        </div>
-      </aside>
+            )}
+            {birthdaysToday.length > 0 && (
+              <BirthdayBoard people={birthdaysToday} />
+            )}
+          </div>
+        </aside>
+      )}
 
       {/* Admins can assign to anyone; a department lead to the members under
           them (the action re-checks the same scope server-side). */}
