@@ -17,12 +17,14 @@ import { approvableFilerIds } from "@/lib/payrollApproval";
 import {
   formatCents,
   parsePaymentDetails,
+  paymentDetailLines,
   paymentSummary,
   payrollPeriodLabel,
   isPayrollOpenFor,
   PAYROLL_METHOD_LABEL,
   PAYROLL_STATUS_BADGE,
   PAYROLL_STATUS_LABEL,
+  type PayrollStatus,
 } from "@/lib/payrollTypes";
 import { PayrollComingSoon } from "../_components/PayrollComingSoon";
 import {
@@ -30,9 +32,29 @@ import {
   eventViews,
   fineLineViews,
 } from "../_components/lineViews";
+import { BatchPayBar } from "../_components/BatchPayBar";
 import { PanelRowShell, type PanelRowSummary } from "../_components/PanelRowShell";
+import {
+  PaySelectionProvider,
+  RowTickSpacer,
+  SelectAllTick,
+  type PayableRow,
+} from "../_components/PaySelection";
 import { SubmissionDetail } from "../_components/SubmissionDetail";
 import { LeadRow } from "./LeadRow";
+import { SettleRow } from "./SettleRow";
+
+/**
+ * What this desk may PAY — the panel's AWAITING and finance's PAYABLE, one
+ * list per surface because each is a copy for deciding what to draw and never
+ * the guard (../finance/actions.ts re-reads the status and the filer).
+ *
+ * WITH_LEAD is absent here as it is there: a request nobody has approved is
+ * not payable by anyone, the lead included. They approve it first — which is
+ * what puts their name in the audit trail as the person who vouched for it —
+ * and settle it on the next pass.
+ */
+const PAYABLE: PayrollStatus[] = ["SUBMITTED", "APPROVED_BY_ADMIN"];
 
 export const metadata: Metadata = { title: "Your team's pay requests" };
 
@@ -42,9 +64,19 @@ export const metadata: Metadata = { title: "Your team's pay requests" };
  *
  * Scoped by lib/payrollApproval.ts and nothing else — a lead sees the members
  * of the normal departments they lead, and no one else's request appears here
- * at any status. Two things they deliberately do NOT get, both of which live
- * one desk along at /payroll/panel: payout instructions (a card number is for
- * the person sending the money), and any verb other than approve / send back.
+ * at any status.
+ *
+ * Three verbs: approve, send back, and — once approved — confirm the payment,
+ * one row or a ticked batch of them (requirePayer in lib/payroll.ts). A lead
+ * settles their own department, so a month that is already vouched for does
+ * not queue behind finance. What they still do not get is anything about
+ * someone else's request: declining a request that has left their desk is
+ * finance's, and so is the register and every other department.
+ *
+ * Payout instructions follow the verb. They used to be withheld on the
+ * grounds that a card number is for the person sending the money — which is
+ * now this page, for a request it may settle, and nobody can pay a Payme card
+ * they cannot read. A row this lead cannot pay still shows none.
  *
  * Past months are readable through the period links, because "what did my team
  * claim in August" is the other half of the question this page answers — but
@@ -163,6 +195,15 @@ export default async function TeamPayrollPage({
   );
   const compensationsTotal = counted.reduce((sum, s) => sum + s.bonusesTotal, 0);
   const waiting = submissions.filter((s) => s.status === "WITH_LEAD");
+  // Approved and unpaid: what this lead can settle now, and what the tick
+  // column and the batch bar are handed. Same order as the list.
+  const toSettle = submissions.filter((s) => PAYABLE.includes(s.status));
+  const settleTotal = toSettle.reduce((sum, s) => sum + s.netTotal, 0);
+  const selectable: PayableRow[] = toSettle.map((s) => ({
+    id: s.id,
+    name: s.user.name ?? s.user.email ?? "—",
+    net: s.netTotal,
+  }));
 
   // Who on the team hasn't filed for this period at all — a lead chasing an
   // approval usually wants the other half of that list too.
@@ -234,7 +275,18 @@ export default async function TeamPayrollPage({
           <span className="font-semibold">
             {`${waiting.length} ${waiting.length === 1 ? "request needs" : "requests need"} your approval.`}
           </span>{" "}
-          {"Finance can't pay any of them until you approve."}
+          {"Nobody can pay them — you or finance — until you approve."}
+        </p>
+      )}
+
+      {toSettle.length > 0 && (
+        <p className="mb-4 rounded-xl border border-line bg-surface px-4 py-3 text-sm text-ink">
+          <span className="font-semibold">
+            {`${toSettle.length} approved ${toSettle.length === 1 ? "request is" : "requests are"} waiting to be paid — ${formatMoney(settleTotal)}.`}
+          </span>{" "}
+          <span className="text-muted-fg">
+            {"Pay them however each person asked, then confirm it here. Finance can settle them too, whoever gets there first."}
+          </span>
         </p>
       )}
 
@@ -243,75 +295,112 @@ export default async function TeamPayrollPage({
           {`Nobody on your team has filed for ${label} yet.`}
         </p>
       ) : (
-        <ul className="flex flex-col gap-2">
-          {submissions.map((s) => {
-            const av = resolveAvatar(s.user.avatar, s.user.email ?? s.user.id);
-            const metaLine =
-              s.status === "DECLINED" && s.resubmitDeadline
-                ? `Sent back · resubmit by ${formatTashkent(s.resubmitDeadline)}${
-                    s.graceDayUsed ? " · grace day" : ""
-                  }`
-                : s.status === "PROCESSED" && s.processedAt
-                  ? `Paid ${formatDateTimeTz(s.processedAt)}`
-                  : s.lastSubmittedAt
-                    ? `Filed ${formatDateTimeTz(s.lastSubmittedAt)}`
-                    : null;
+        /* The provider is what makes a batch possible at all: the ticks on
+           the rows and the bar that pays them are siblings, and this is the
+           ancestor they share. It is handed exactly the rows awaiting
+           payment, so a row that has just been paid drops out of the batch by
+           itself when the page revalidates. */
+        <PaySelectionProvider selectable={selectable}>
+          {toSettle.length > 1 && (
+            <div className="mb-2 flex justify-end">
+              <SelectAllTick />
+            </div>
+          )}
+          <ul className="flex flex-col gap-2">
+            {submissions.map((s) => {
+              const canSettle = PAYABLE.includes(s.status);
+              const av = resolveAvatar(s.user.avatar, s.user.email ?? s.user.id);
+              const metaLine =
+                s.status === "DECLINED" && s.resubmitDeadline
+                  ? `Sent back · resubmit by ${formatTashkent(s.resubmitDeadline)}${
+                      s.graceDayUsed ? " · grace day" : ""
+                    }`
+                  : s.status === "PROCESSED" && s.processedAt
+                    ? `Paid ${formatDateTimeTz(s.processedAt)}`
+                    : s.lastSubmittedAt
+                      ? `Filed ${formatDateTimeTz(s.lastSubmittedAt)}`
+                      : null;
 
-            const summary: PanelRowSummary = {
-              name: s.user.name ?? s.user.email ?? "—",
-              deptLine: departmentLine(s.user.memberships),
-              emoji: av.emoji,
-              bg: av.bg,
-              metaLine,
-              netLabel: formatMoney(s.netTotal),
-              // No attention flags here: "waited too long" and "unusually
-              // large" are the reviewer's triage across the whole company, and
-              // a lead reading five of their own people's requests has the
-              // context those marks are a substitute for.
-              flags: [],
-              statusLabel: PAYROLL_STATUS_LABEL[s.status],
-              statusBadge: PAYROLL_STATUS_BADGE[s.status],
-              sourceLabel: PAYROLL_METHOD_LABEL[s.paymentMethod],
-            };
+              const summary: PanelRowSummary = {
+                name: s.user.name ?? s.user.email ?? "—",
+                deptLine: departmentLine(s.user.memberships),
+                emoji: av.emoji,
+                bg: av.bg,
+                metaLine,
+                netLabel: formatMoney(s.netTotal),
+                // No attention flags here: "waited too long" and "unusually
+                // large" are the reviewer's triage across the whole company, and
+                // a lead reading five of their own people's requests has the
+                // context those marks are a substitute for.
+                flags: [],
+                statusLabel: PAYROLL_STATUS_LABEL[s.status],
+                statusBadge: PAYROLL_STATUS_BADGE[s.status],
+                sourceLabel: PAYROLL_METHOD_LABEL[s.paymentMethod],
+              };
 
-            const detail = (
-              <SubmissionDetail
-                view={{
-                  id: s.id,
-                  baseSalary: s.baseSalary,
-                  bonusesTotal: s.bonusesTotal,
-                  finesTotal: s.finesTotal,
-                  expensesTotalCents: s.expensesTotalCents,
-                  netTotal: s.netTotal,
-                  bonuses: bonusLineViews(s.bonusLines, selected.year),
-                  fines: fineLineViews(s.fineLines, selected.year),
-                  expenses: s.expenses,
-                  paymentLine: paymentSummary(
-                    s.paymentMethod,
-                    parsePaymentDetails(s.paymentDetails),
-                  ),
-                  // Empty on purpose — see the page comment. Approving a claim
-                  // needs the amounts and the receipts, never the card number
-                  // it will be sent to.
-                  paymentDetails: [],
-                  events: eventViews(s.events, formatDateTimeTz),
-                }}
-              />
-            );
+              const detail = (
+                <SubmissionDetail
+                  view={{
+                    id: s.id,
+                    baseSalary: s.baseSalary,
+                    bonusesTotal: s.bonusesTotal,
+                    finesTotal: s.finesTotal,
+                    expensesTotalCents: s.expensesTotalCents,
+                    netTotal: s.netTotal,
+                    bonuses: bonusLineViews(s.bonusLines, selected.year),
+                    fines: fineLineViews(s.fineLines, selected.year),
+                    expenses: s.expenses,
+                    paymentLine: paymentSummary(
+                      s.paymentMethod,
+                      parsePaymentDetails(s.paymentDetails),
+                    ),
+                    // Only where this lead is the one paying: settling a
+                    // request needs the account it goes to, approving one needs
+                    // the amounts and the receipts and nothing else.
+                    paymentDetails: canSettle
+                      ? paymentDetailLines(
+                          s.paymentMethod,
+                          parsePaymentDetails(s.paymentDetails),
+                        )
+                      : [],
+                    events: eventViews(s.events, formatDateTimeTz),
+                  }}
+                />
+              );
 
-            return (
-              <li key={s.id}>
-                {s.status === "WITH_LEAD" ? (
-                  <LeadRow submissionId={s.id} summary={summary}>
+              // PanelRowShell is the <li>, so each shape is keyed here rather
+              // than wrapped in one.
+              if (s.status === "WITH_LEAD") {
+                return (
+                  <LeadRow key={s.id} submissionId={s.id} summary={summary}>
                     {detail}
                   </LeadRow>
-                ) : (
-                  <PanelRowShell summary={summary}>{detail}</PanelRowShell>
-                )}
-              </li>
-            );
-          })}
-        </ul>
+                );
+              }
+              if (canSettle) {
+                return (
+                  <SettleRow key={s.id} submissionId={s.id} summary={summary}>
+                    {detail}
+                  </SettleRow>
+                );
+              }
+              return (
+                <PanelRowShell
+                  key={s.id}
+                  summary={summary}
+                  // Nothing to tick on a settled or sent-back row, but the
+                  // column has to line up with the rows that do.
+                  select={<RowTickSpacer />}
+                >
+                  {detail}
+                </PanelRowShell>
+              );
+            })}
+          </ul>
+          {/* Only mounted for a desk already established as one that may pay
+              something — see BatchPayBar. */}
+          <BatchPayBar />
+        </PaySelectionProvider>
       )}
 
       {unfiled.length > 0 && (

@@ -44,6 +44,7 @@ import {
   type PanelBoardItem,
   type PanelBoardSummary,
 } from "../_components/PanelBoard";
+import { BatchPayBar } from "../_components/BatchPayBar";
 import { RowTickSpacer } from "../_components/PaySelection";
 import {
   medianNet,
@@ -57,7 +58,6 @@ import {
 } from "../_components/PanelRowShell";
 import { PanelSummary, type PanelStat } from "../_components/PanelSummary";
 import { SubmissionDetail } from "../_components/SubmissionDetail";
-import { BatchPayBar } from "./BatchPayBar";
 import { FinanceRow } from "./FinanceRow";
 // The two ways to read the same month, shared with the three redirects that
 // land here so they cannot name a view this page does not have.

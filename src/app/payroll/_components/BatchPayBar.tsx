@@ -2,18 +2,20 @@
 
 import { useState, useTransition } from "react";
 import { formatMoney } from "@/lib/penalties";
-import { usePaySelection } from "../_components/PaySelection";
+import { usePaySelection } from "./PaySelection";
 import { confirmPayments } from "../finance/actions";
 
 /**
  * The batch end of the row ticks: one bar over the bottom of the panel while
  * anything is ticked, and the confirmation that pays them.
  *
- * Like FinanceRow, this component IS the permission — there is no `canPay`
- * prop. /payroll/panel renders it only for the reviewer, so a viewer who may
- * not pay never has the action module in their bundle, whatever they manage to
- * tick. (Nothing ticks for them either: the ticks live on FinanceRow, which is
- * only rendered on a payable row for the reviewer.)
+ * Like the rows it settles, this component IS the permission — there is no
+ * `canPay` prop. A page renders it only for a viewer who may pay something:
+ * /payroll/panel for the reviewer, /payroll/team for a department lead over
+ * their own members. Anyone else never has the action module in their bundle,
+ * whatever they manage to tick. (Nothing ticks for them either: the ticks live
+ * on FinanceRow and SettleRow, and a page only renders those on a row it has
+ * established this viewer may pay.)
  *
  * The bar is the count and the money; the modal is the list. Paying several
  * people is one click more than paying one on purpose — the tick is what

@@ -208,6 +208,11 @@ export default async function DepartmentPanelPage() {
    * mini department carries no payroll desk, so the two lists genuinely
    * differ. Read-only here; the verbs are on /payroll/team.
    *
+   * Two numbers can be waiting on this lead now, not one: requests to approve,
+   * and approved requests to pay (a lead settles their own department — see
+   * requirePayer in lib/payroll.ts). Approving comes first, so it is what the
+   * card leads with when both are outstanding.
+   *
    * Skipped entirely while payroll is closed for this account: the figure
    * would be a number nobody can act on, under a link to a coming-soon screen.
    */
@@ -218,6 +223,9 @@ export default async function DepartmentPanelPage() {
     label: string;
     requested: number;
     waiting: number;
+    /** Approved and unpaid — this lead can settle these themselves. */
+    toPay: number;
+    toPayTotal: number;
     count: number;
   } | null = null;
   if (payrollScope.size > 0) {
@@ -232,10 +240,18 @@ export default async function DepartmentPanelPage() {
       },
       select: { status: true, netTotal: true },
     });
+    // The same two statuses /payroll/team and the finance panel treat as
+    // awaiting payment; a legacy APPROVED_BY_ADMIN row is payable like any
+    // other (PAYABLE in app/payroll/finance/actions.ts).
+    const payable = rows.filter(
+      (r) => r.status === "SUBMITTED" || r.status === "APPROVED_BY_ADMIN",
+    );
     teamPayroll = {
       label: payrollPeriodLabel(period.year, period.month),
       requested: rows.reduce((sum, r) => sum + r.netTotal, 0),
       waiting: rows.filter((r) => r.status === "WITH_LEAD").length,
+      toPay: payable.length,
+      toPayTotal: payable.reduce((sum, r) => sum + r.netTotal, 0),
       count: rows.length,
     };
   }
@@ -288,7 +304,11 @@ export default async function DepartmentPanelPage() {
                 ? `${teamPayroll.waiting} pay ${
                     teamPayroll.waiting === 1 ? "request needs" : "requests need"
                   } your approval`
-                : `Your team's ${teamPayroll.label} pay requests`}
+                : teamPayroll.toPay > 0
+                  ? `${teamPayroll.toPay} approved pay ${
+                      teamPayroll.toPay === 1 ? "request is" : "requests are"
+                    } waiting to be paid`
+                  : `Your team's ${teamPayroll.label} pay requests`}
             </span>
             <span className="block text-xs text-muted-fg">
               {teamPayroll.count === 0
@@ -297,13 +317,19 @@ export default async function DepartmentPanelPage() {
                     teamPayroll.count
                   } ${teamPayroll.count === 1 ? "request" : "requests"}${
                     teamPayroll.waiting > 0
-                      ? " — finance can't pay the waiting ones until you approve"
-                      : ""
+                      ? " — nothing can be paid until you approve it"
+                      : teamPayroll.toPay > 0
+                        ? ` — ${formatMoney(teamPayroll.toPayTotal)} of it yours to settle and confirm`
+                        : ""
                   }.`}
             </span>
           </span>
           <span className="shrink-0 rounded-lg bg-brand px-3 py-1.5 text-xs font-semibold text-white">
-            {teamPayroll.waiting > 0 ? "Review" : "Open"}
+            {teamPayroll.waiting > 0
+              ? "Review"
+              : teamPayroll.toPay > 0
+                ? "Settle"
+                : "Open"}
           </span>
         </Link>
       )}

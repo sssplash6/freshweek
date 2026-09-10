@@ -12,10 +12,13 @@ import {
   expireLapsedSubmissions,
   financeEmails,
   formatTashkent,
+  mayPay,
   processSubmission,
   requireFinance,
+  requirePayer,
   resubmitWindowFor,
   reviewerUsers,
+  type Payer,
 } from "@/lib/payroll";
 import { regenerateInvoicePdf } from "@/lib/payrollInvoice";
 import {
@@ -33,8 +36,15 @@ export type FinanceActionResult = { ok: true } | { ok: false; error: string };
 const fail = (error: string): FinanceActionResult => ({ ok: false, error });
 
 /**
- * What finance may PAY, and what finance may DECLINE. They are deliberately
+ * What may be PAID, and what finance may DECLINE. They are deliberately
  * different sets, and the difference IS the lead gate.
+ *
+ * Paying is two desks now, not one: finance over the company, and a
+ * department lead over the members they approve (`requirePayer` in
+ * lib/payroll.ts). Both pay from exactly this set of statuses — the scope is
+ * who the request belongs to, never which stage it may be paid from.
+ * Declining is finance's alone; a lead's send-back is in ../team/actions.ts
+ * and only reaches a request still sitting on their own desk.
  *
  * SUBMITTED is a request the lead has passed on (or one whose filer has no
  * lead — lib/payrollApproval.ts). APPROVED_BY_ADMIN is the legacy half: rows
@@ -65,6 +75,10 @@ function revalidatePanels() {
   // The three reviewer URLs collapsed into one panel; the old paths are
   // 307s now and have nothing of their own to refresh.
   revalidatePath("/payroll/panel");
+  // A lead pays from their own desk, and their department card counts what is
+  // left to pay — both go stale on a payment whoever made it.
+  revalidatePath("/payroll/team");
+  revalidatePath("/department");
   revalidatePath("/penalties"); // the fine deduction lands there as a receipt
 }
 
@@ -187,17 +201,23 @@ export async function declineSubmission(
 }
 
 /**
- * One payment, from a desk that has already been established as the
- * reviewer's: re-verify the snapshot against the live ledger, write the fine
- * deduction back as one PAYROLL FinePayment batch, stamp the bonuses consumed
- * and move the request to PROCESSED (lib/payroll.ts processSubmission), then
- * tell the filer and the other reviewers.
+ * One payment, from a desk already established as a payer's: re-verify the
+ * snapshot against the live ledger, write the fine deduction back as one
+ * PAYROLL FinePayment batch, stamp the bonuses consumed and move the request
+ * to PROCESSED (lib/payroll.ts processSubmission), then tell the filer and the
+ * reviewers.
  *
  * It does no session work and no revalidation, because it is shared by the
  * single row's button and the batch below, and those differ in exactly that:
- * a batch checks the role once and refreshes the page once, at the end. The
- * caller MUST have gone through `requireFinance` and the closed-payroll gate
- * before calling this — `actorId` is the proof it did.
+ * a batch resolves the payer once and refreshes the page once, at the end. The
+ * caller MUST have gone through `requirePayer` and the closed-payroll gate
+ * before calling this — the `payer` is the proof it did.
+ *
+ * WHOSE request it is gets checked here, per row, and not by the caller: a
+ * lead's batch is a list of ids from a page, and the only thing that keeps a
+ * neighbouring department out of it is re-reading the filer of every request
+ * before any money moves. A request outside the payer's scope answers exactly
+ * as a missing one does, for the reason ../team/actions.ts gives.
  *
  * Every failure here is per-request and returns rather than throws: in a batch
  * one stale snapshot must not take the other payments down with it. Each
@@ -211,12 +231,13 @@ type PayOutcome =
 
 async function payOne(
   submissionId: string,
-  actorId: string,
+  payer: Payer,
 ): Promise<PayOutcome> {
   const sub = await loadForReview(submissionId);
-  if (!sub) {
+  if (!sub || !mayPay(payer, sub.user.id)) {
     return { ok: false, name: "That request", error: "Request not found." };
   }
+  const actorId = payer.actorId;
   const who = sub.user.name ?? sub.user.email ?? "Someone";
   if (!PAYABLE.includes(sub.status)) {
     return {
@@ -238,7 +259,13 @@ async function payOne(
       return {
         ok: false,
         name: who,
-        error: `The ledger moved after filing — ${result.reasons.join(" ")} Decline it so they refile with a fresh snapshot.`,
+        // Only finance can decline, so only finance is told to: a lead reading
+        // "decline it" would go looking for a button they do not have.
+        error:
+          `The ledger moved after filing — ${result.reasons.join(" ")} ` +
+          (payer.all
+            ? "Decline it so they refile with a fresh snapshot."
+            : "Ask finance to send it back so they can refile with a fresh snapshot."),
       };
     }
   } catch (e) {
@@ -287,6 +314,11 @@ async function payOne(
  * lib/payroll.ts processSubmission). If the ledger moved after filing, this
  * refuses with the exact reasons instead of paying wrong amounts — decline it
  * so the person refiles with a fresh snapshot.
+ *
+ * Finance calls this from /payroll/panel over anybody; a department lead calls
+ * it from /payroll/team over the people they approve. `requirePayer` decides
+ * which of the two is asking and `payOne` re-checks the row against that
+ * scope, so the door is the same one either way.
  */
 export async function confirmPayment(
   submissionId: string,
@@ -295,10 +327,10 @@ export async function confirmPayment(
   if (!isPayrollOpenFor(session?.user?.email)) {
     return fail("Payroll is closed right now.");
   }
-  const actorId = await requireFinance(session);
+  const payer = await requirePayer(session);
   await expireLapsedSubmissions();
 
-  const outcome = await payOne(submissionId, actorId);
+  const outcome = await payOne(submissionId, payer);
   if (!outcome.ok) return fail(outcome.error);
 
   revalidatePanels();
@@ -323,8 +355,9 @@ export type BatchPaymentResult =
     };
 
 /**
- * Confirm several payments in one go — the reviewer ticks a run of rows (say,
- * everything paid from one source) and settles them together.
+ * Confirm several payments in one go — a payer ticks a run of rows (say,
+ * everything paid from one source, or their whole department) and settles them
+ * together.
  *
  * PARTIAL SUCCESS IS THE NORMAL OUTCOME, not an error case. Each request is
  * paid in its own transaction, so a stale snapshot or a row someone else just
@@ -334,8 +367,9 @@ export type BatchPaymentResult =
  * person's fines moved would mean un-paying people the ledger was happy with.
  *
  * The ids come from the client, so they are treated as a list of references
- * and nothing more: the role is checked once here, and `payOne` re-reads every
- * request's own status before it moves any money.
+ * and nothing more: the desk is resolved once here, and `payOne` re-reads
+ * every request's own status AND its filer before it moves any money — which
+ * is what stops a lead's batch from reaching past their own department.
  */
 export async function confirmPayments(
   submissionIds: string[],
@@ -344,7 +378,7 @@ export async function confirmPayments(
   if (!isPayrollOpenFor(session?.user?.email)) {
     return { ok: false, error: "Payroll is closed right now." };
   }
-  const actorId = await requireFinance(session);
+  const payer = await requirePayer(session);
 
   const ids = [
     ...new Set(
@@ -365,7 +399,7 @@ export async function confirmPayments(
   let paid = 0;
   const failed: { id: string; name: string; error: string }[] = [];
   for (const id of ids) {
-    const outcome = await payOne(id, actorId);
+    const outcome = await payOne(id, payer);
     if (outcome.ok) paid += 1;
     else failed.push({ id, name: outcome.name, error: outcome.error });
   }

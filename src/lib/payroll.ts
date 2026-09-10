@@ -33,6 +33,7 @@ import {
   type PaymentDetails,
   type PayrollMethod,
 } from "@/lib/payrollTypes";
+import { approvableFilerIds } from "@/lib/payrollApproval";
 import { notify } from "@/lib/notifications";
 import { sendEmail } from "@/lib/email";
 import type { PayrollStatus, Prisma } from "@/generated/prisma/client";
@@ -44,6 +45,16 @@ type Db = Prisma.TransactionClient | typeof prisma;
 // Payroll has two desks: the filer's DEPARTMENT LEAD, then finance. A filing
 // waits on the lead, who passes it on or sends it back; finance then pays it
 // or declines it, and cannot pay a request the lead has not passed.
+//
+// PAYING is not finance's alone any more. A lead settles their own department:
+// once they have approved a member's request, they can confirm the payment of
+// it too, one row at a time or a batch of them together (requirePayer below).
+// It is the same verb finance holds, over a slice of one department instead of
+// the company — the lead pays the people they just approved, so finance is not
+// the bottleneck on a month where every request is already vouched for by the
+// person who knows the work. Declining stays finance's: sending a request back
+// is a different job from paying it, and the lead's own send-back already
+// covers the stage the request is on their desk for.
 //
 // Finance is a LIST, not a person (BUILT_IN_FINANCE below). Whoever is on it
 // holds the same desk: any of them can pay or decline any request, and the
@@ -168,6 +179,47 @@ export async function requireFinance(session: SessionLike): Promise<string> {
     throw new Error("Not authorized");
   }
   return id;
+}
+
+/**
+ * Who may confirm a payment, and over whom.
+ *
+ * Two desks hold the same verb through different doors, so it is worked out
+ * once here rather than re-derived by every caller:
+ *
+ *   • finance — `all: true`, the whole company, exactly `requireFinance`.
+ *   • a department lead — the members of the normal departments they lead,
+ *     which is `approvableFilerIds`: the same set they approve, so the desk
+ *     that vouched for a request is the desk that can settle it. That set
+ *     excludes the lead themselves, so nobody pays their own request, and it
+ *     excludes mini departments, which carry no payroll desk at all.
+ *
+ * Anyone who is neither is refused here, before a submission is even read.
+ * `mayPay` then decides the row: an id off a page proves nothing, so the
+ * scope is re-applied per request rather than once per batch.
+ */
+export type Payer = {
+  actorId: string;
+  /** Finance: every filer. A lead: only `filerIds`. */
+  all: boolean;
+  filerIds: ReadonlySet<string>;
+};
+
+/** Throw unless the signed-in user may pay somebody; returns what they may pay. */
+export async function requirePayer(session: SessionLike): Promise<Payer> {
+  const actorId = session?.user?.id;
+  if (!actorId) throw new Error("Not authorized");
+  if (isFinance(session?.user?.email)) {
+    return { actorId, all: true, filerIds: new Set() };
+  }
+  const led = await approvableFilerIds(prisma, actorId);
+  if (led.size === 0) throw new Error("Not authorized");
+  return { actorId, all: false, filerIds: led };
+}
+
+/** Whether this payer may settle `filerId`'s request. */
+export function mayPay(payer: Payer, filerId: string): boolean {
+  return payer.all || payer.filerIds.has(filerId);
 }
 
 /** User rows for a list of reviewer emails (those never signed in are skipped). */

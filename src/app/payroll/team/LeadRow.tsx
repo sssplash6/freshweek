@@ -5,11 +5,14 @@ import {
   PanelRowShell,
   type PanelRowSummary,
 } from "../_components/PanelRowShell";
+import { RowTickSpacer } from "../_components/PaySelection";
 import { approveAsLead, sendBackAsLead } from "./actions";
 
 /**
- * A team member's request plus the lead's two moves: pass it to finance, or
- * send it back with a required note.
+ * A team member's request plus the lead's two moves at this stage: approve it,
+ * or send it back with a required note. Paying comes after approval and on a
+ * different row (SettleRow) — nobody pays a request that has not been
+ * approved, the lead who would approve it included.
  *
  * Modelled on FinanceRow in ../panel, including the part that matters most:
  * there is no `canAct` prop. This component IS the permission — ../team/page
@@ -67,6 +70,10 @@ export function LeadRow({
   return (
     <PanelRowShell
       summary={summary}
+      // Nothing to tick until it is approved, but the column still has to line
+      // up with the rows that can be batched (the spacer draws itself only
+      // while something on the page is tickable).
+      select={<RowTickSpacer />}
       footer={
         <>
           <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-line pt-3">
