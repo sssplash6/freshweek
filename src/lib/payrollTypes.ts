@@ -120,7 +120,7 @@ export type PayrollStatus =
  * How someone is paid — the "Source" column of the finance team's accounting
  * sheet, so a filed row reconciles against that sheet without translation.
  *
- * Most of these are RETIRED: payroll settles through four sources now (see
+ * Most of these are RETIRED: payroll settles through five sources now (see
  * PAYROLL_METHODS_OFFERED), and the rest are here for the same reason
  * APPROVED_BY_ADMIN is still a status — rows filed under them exist, and a
  * paid request must keep saying how it was actually paid. Nothing new can be
@@ -132,6 +132,7 @@ export type PayrollMethod =
   | "PAYME"
   | "UZBEK_COMPANY"
   | "WISE_USD"
+  | "BANK_TRANSFER"
   // Retired — readable, never offered.
   | "CASH_SINGAPORE"
   | "UZS_CARD"
@@ -143,15 +144,16 @@ export type PayrollMethod =
   | "VARIOUS";
 
 /**
- * The four sources payroll actually uses, in the order finance names them.
- * This is the list the form offers and the only list a new filing may come
- * from — everything else in the enum is history.
+ * The sources payroll actually uses, in the order finance names them. This is
+ * the list the form offers and the only list a new filing may come from —
+ * everything else in the enum is history.
  */
 export const PAYROLL_METHODS_OFFERED: PayrollMethod[] = [
   "CASH_UZBEKISTAN",
   "PAYME",
   "UZBEK_COMPANY",
   "WISE_USD",
+  "BANK_TRANSFER",
 ];
 
 /**
@@ -194,6 +196,10 @@ export const PAYROLL_METHOD_LABEL: Record<PayrollMethod, string> = {
   // Still WISE_USD in the column, so every Wise row ever filed stays one
   // bucket on the panel and the sheet; finance calls it Wise, so it reads Wise.
   WISE_USD: "Wise",
+  // A wire straight to the person's own bank — the one source that carries
+  // cross-border routing (IBAN, SWIFT/BIC) rather than settling on a rail
+  // finance already holds an account on.
+  BANK_TRANSFER: "Bank transfer",
   CASH_SINGAPORE: "Cash Singapore",
   UZS_CARD: "Uzbek card",
   VISA_CARD: "Visa card",
@@ -252,10 +258,13 @@ export type PaymentDetails = {
   cardHolder?: string;
   cardNumber?: string;
   phone?: string;
+  accountHolder?: string;
   bankName?: string;
   accountNumber?: string;
   bankCode?: string;
   swift?: string;
+  bankAddress?: string;
+  paymentReference?: string;
   otherDetails?: string;
 };
 
@@ -343,6 +352,39 @@ const FIELDS: Record<PaymentFieldKey, PaymentField> = {
     required: false,
     kind: "text",
   },
+  // The beneficiary, as the receiving bank has it. A wire is rejected outright
+  // when this doesn't match the account, so it is asked for in full rather
+  // than assumed from the filer's name in this app.
+  accountHolder: {
+    key: "accountHolder",
+    label: "Account holder",
+    placeholder: "Name exactly as the bank has it",
+    maxLength: 120,
+    required: true,
+    kind: "text",
+  },
+  // Mandatory for a cross-border wire, unlike the branch code above: a
+  // correspondent bank routes on the address, and a transfer without it comes
+  // back days later — well after the filing window has shut.
+  bankAddress: {
+    key: "bankAddress",
+    label: "Bank address",
+    placeholder: "Branch address of the receiving bank",
+    maxLength: 200,
+    required: true,
+    kind: "text",
+  },
+  // What the sender writes on the transfer. Left empty, finance uses the
+  // invoice number and the period, which this app already knows — so it is
+  // offered for the banks that insist on a particular wording, not demanded.
+  paymentReference: {
+    key: "paymentReference",
+    label: "Payment reference",
+    placeholder: "What the transfer should say (optional)",
+    maxLength: 140,
+    required: false,
+    kind: "text",
+  },
   otherDetails: {
     key: "otherDetails",
     label: "How to pay you",
@@ -352,6 +394,20 @@ const FIELDS: Record<PaymentFieldKey, PaymentField> = {
     kind: "note",
   },
 };
+
+/**
+ * A shared field as a stricter method asks for it — same KEY, so the value
+ * still reads back through one place, with the wording and the requirement
+ * that method needs. Bank routing is optional beside a card number (finance
+ * can pay the card) and mandatory on its own (there is nothing else to pay),
+ * and a cross-border form calls the account number an IBAN.
+ */
+function demanded(
+  field: PaymentField,
+  over: Partial<Omit<PaymentField, "key">> = {},
+): PaymentField {
+  return { ...field, required: true, ...over };
+}
 
 /**
  * What to ask for, given the method. ONE table — the form renders it, the
@@ -365,6 +421,21 @@ export function paymentFieldsFor(method: PayrollMethod): PaymentField[] {
       return [FIELDS.wiseEmail];
     case "PAYME":
       return [FIELDS.cardNumber, FIELDS.phone];
+    // A wire to the person's own bank, asked for in the order a transfer form
+    // asks for it: who is paid, then where the money lands, then how it is
+    // routed across a border.
+    case "BANK_TRANSFER":
+      return [
+        FIELDS.accountHolder,
+        demanded(FIELDS.bankName, { placeholder: "Name of the receiving bank" }),
+        demanded(FIELDS.accountNumber, {
+          label: "IBAN / account number",
+          placeholder: "e.g. GB29 NWBK 6016 1331 9268 19",
+        }),
+        demanded(FIELDS.swift, { placeholder: "e.g. ABCDUZ22" }),
+        FIELDS.bankAddress,
+        FIELDS.paymentReference,
+      ];
     // Retired, but old rows still read back through here: they show what they
     // were filed with, minus the expiry date nothing asks for any more.
     case "UZS_CARD":
@@ -487,6 +558,12 @@ export function paymentSummary(
   const label = PAYROLL_METHOD_LABEL[method];
   if (details.wiseEmail) return `${label} · ${details.wiseEmail}`;
   if (details.cardNumber) return `${label} · ${maskCardNumber(details.cardNumber)}`;
+  // An IBAN carries letters, so this is the last four CHARACTERS rather than
+  // maskCardNumber's last four digits.
+  if (details.accountNumber) {
+    const account = details.accountNumber.replace(/\s+/g, "");
+    return `${label} · •••• ${account.slice(-4).toUpperCase()}`;
+  }
   // Payme to a phone and no card: the number is the whole address, so it is
   // what identifies the payout.
   if (details.phone) return `${label} · ${details.phone}`;
