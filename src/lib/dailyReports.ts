@@ -12,7 +12,6 @@ const BUILT_IN_REPORTERS = [
   "sega@freshman.academy",
   "classes@freshman.academy",
   "khusanboy@freshman.academy",
-  "banu@freshman.academy",
   "shakhzod@freshman.academy",
 ];
 
@@ -65,7 +64,6 @@ const REPORTER_FIRST_NAMES: Record<string, string> = {
   "sega@freshman.academy": "Sega",
   "classes@freshman.academy": "Shokhrukh",
   "khusanboy@freshman.academy": "Khusanboy",
-  "banu@freshman.academy": "Banu",
   "shakhzod@freshman.academy": "Shakhzod",
 };
 
