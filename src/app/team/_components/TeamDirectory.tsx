@@ -2,6 +2,8 @@
 
 import { useMemo, useState } from "react";
 import { ROLE_LABEL } from "@/lib/team";
+import { COMPANY_TIME_ZONE } from "@/lib/dates";
+import { buildXlsx, downloadXlsx, type XlsxColumn } from "@/lib/xlsx";
 
 /**
  * One person as the directory shows them: already shaped by the page, so the
@@ -29,6 +31,22 @@ function linkedinUrl(v: string): string {
   const handle = v.replace(/^.*linkedin\.com\/(in\/)?/i, "").replace(/^@/, "");
   return `https://www.linkedin.com/in/${handle}`;
 }
+
+/**
+ * The roster as a spreadsheet: how to reach someone, and nothing else. The
+ * social handles and birthdays the page carries are deliberately left behind —
+ * an exported file gets mailed around and outlives the roster it came from, so
+ * the personal columns stay on the page, where they're only ever seen by
+ * someone signed in and current.
+ */
+const EXPORT_COLUMNS: XlsxColumn[] = [
+  { header: "Name", width: 24 },
+  { header: "Department", width: 30 },
+  { header: "Role", width: 12 },
+  { header: "Email", width: 30 },
+  { header: "Work phone", width: 18 },
+  { header: "Telegram", width: 18 },
+];
 
 /**
  * The directory itself: a search box over the whole roster, then the same
@@ -71,6 +89,35 @@ export function TeamDirectory({ rows }: { rows: TeamRow[] }) {
     .filter(({ haystack }) => terms.every((t) => haystack.includes(t)))
     .map(({ row }) => row);
 
+  /**
+   * The people currently on screen, as an .xlsx. Deliberately `visible` and
+   * not `rows`: the button sits inside the same toolbar as the search, and a
+   * search that has narrowed the page to one department should narrow the
+   * export with it — otherwise the file quietly disagrees with what was on
+   * screen when it was asked for. Empty cells stay empty rather than taking
+   * the table's em dash, which a spreadsheet would treat as a value.
+   */
+  function downloadExcel() {
+    const today = new Date().toLocaleDateString("en-CA", {
+      timeZone: COMPANY_TIME_ZONE,
+    });
+    downloadXlsx(
+      buildXlsx({
+        sheetName: "Team",
+        columns: EXPORT_COLUMNS,
+        rows: visible.map((r) => [
+          r.name ?? "",
+          r.department ?? "",
+          r.lead ? ROLE_LABEL.LEAD : ROLE_LABEL.MEMBER,
+          r.email ?? "",
+          r.workPhone ?? "",
+          r.telegram ? `@${r.telegram}` : "",
+        ]),
+      }),
+      `team-${today}.xlsx`,
+    );
+  }
+
   return (
     <>
       <div className="mb-4 flex flex-wrap items-center gap-2">
@@ -96,6 +143,17 @@ export function TeamDirectory({ rows }: { rows: TeamRow[] }) {
             </button>
           </>
         )}
+        <button
+          type="button"
+          onClick={downloadExcel}
+          disabled={visible.length === 0}
+          title={`Download ${visible.length} ${
+            visible.length === 1 ? "person" : "people"
+          } as an Excel sheet`}
+          className="shrink-0 whitespace-nowrap rounded-full border border-line bg-surface px-3 py-1.5 text-xs font-semibold text-brand shadow-sm transition hover:bg-canvas disabled:pointer-events-none disabled:opacity-40"
+        >
+          Download Excel
+        </button>
       </div>
 
       {visible.length === 0 ? (
