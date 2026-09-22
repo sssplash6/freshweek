@@ -3,8 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
-import { isAdmin } from "@/lib/admin";
-import { isFinance } from "@/lib/payroll";
+import { isFinance, isPayrollAdmin } from "@/lib/payroll";
 import { isPayrollOpenFor } from "@/lib/payrollTypes";
 
 export type SheetResult = { ok: true } | { ok: false; error: string };
@@ -21,7 +20,7 @@ const fail = (error: string): SheetResult => ({ ok: false, error });
 async function requireSheetEditor() {
   const session = await auth();
   if (!session?.user?.id) throw new Error("Not authenticated");
-  if (!isFinance(session.user.email) && !isAdmin(session.user.email)) {
+  if (!isFinance(session.user.email) && !isPayrollAdmin(session.user.email)) {
     throw new Error("Not authorized");
   }
   return session;

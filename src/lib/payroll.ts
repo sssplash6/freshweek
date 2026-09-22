@@ -100,6 +100,14 @@ const BUILT_IN_FINANCE = [
  */
 const BUILT_IN_PAYROLL_OBSERVERS = ["sega@freshman.academy"];
 
+/**
+ * Global admins who get NO payroll. The admin list (lib/admin.ts) is one flat
+ * grant and payroll is the one part of it nobody should inherit by accident —
+ * so an admin can be handed the app without being handed the books. Env var
+ * ADDS, the ADMIN_EMAILS convention.
+ */
+const BUILT_IN_PAYROLL_EXCLUDED = ["dostonbps@gmail.com"];
+
 function withEnvEmails(builtIn: string[], envVar: string): string[] {
   const fromEnv = (process.env[envVar] ?? "")
     .split(",")
@@ -132,12 +140,26 @@ export function isPayrollObserver(email: string | null | undefined): boolean {
 }
 
 /**
+ * Being a global admin, minus the ones excluded above. Every payroll surface
+ * that lets an admin in keys off THIS, never `isAdmin` directly — the panel,
+ * the stats, the invoices, the register — so one list is the whole exclusion.
+ */
+export function isPayrollAdmin(email: string | null | undefined): boolean {
+  return (
+    isAdmin(email) &&
+    !withEnvEmails(BUILT_IN_PAYROLL_EXCLUDED, "PAYROLL_EXCLUDED_EMAILS").includes(
+      (email ?? "").toLowerCase(),
+    )
+  );
+}
+
+/**
  * Who may read the whole of payroll — the panel, the stats, anyone's invoice:
  * the reviewer, global admins, and observers. Reading is the wide door; every
  * verb below it is `isFinance` alone.
  */
 export function canSeeAllPayroll(email: string | null | undefined): boolean {
-  return isAdmin(email) || isFinance(email) || isPayrollObserver(email);
+  return isPayrollAdmin(email) || isFinance(email) || isPayrollObserver(email);
 }
 
 /**
@@ -165,7 +187,7 @@ export function canSeeAllPayroll(email: string | null | undefined): boolean {
 export function canReadPayrollWhileClosed(
   email: string | null | undefined,
 ): boolean {
-  return isAdmin(email) || isPayrollObserver(email);
+  return isPayrollAdmin(email) || isPayrollObserver(email);
 }
 
 type SessionLike = {

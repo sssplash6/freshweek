@@ -14,6 +14,7 @@ const BUILT_IN_ADMINS = [
   "valera@freshman.academy",
   "shakhzod@freshman.academy",
   "valentina@freshman.academy",
+  "dostonbps@gmail.com",
 ];
 
 /** Every admin email: the built-ins plus any from ADMIN_EMAILS, lowercased. */

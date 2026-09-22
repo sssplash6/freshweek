@@ -4,7 +4,6 @@ import { redirect } from "next/navigation";
 import { auth } from "@/auth";
 import { assertApproved } from "@/lib/approval";
 import { prisma } from "@/lib/prisma";
-import { isAdmin } from "@/lib/admin";
 import { resolveAvatar } from "@/lib/avatar";
 import { departmentLine } from "@/lib/team";
 import { COMPANY_TIME_ZONE, formatDateTimeTz, formatYmd } from "@/lib/dates";
@@ -13,6 +12,7 @@ import { BackLink } from "@/app/_components/BackLink";
 import {
   canReadPayrollWhileClosed,
   canSeeAllPayroll,
+  isPayrollAdmin,
   eligibleEmployees,
   ensureCurrentPeriod,
   expireLapsedSubmissions,
@@ -232,7 +232,7 @@ export default async function PayrollPanelPage({
   // false for everyone, because every action behind them refuses anyway and a
   // button that throws is worse than no button.
   const canPay = payrollOpen && isFinance(session.user.email);
-  const canRecord = payrollOpen && (canPay || isAdmin(session.user.email));
+  const canRecord = payrollOpen && (canPay || isPayrollAdmin(session.user.email));
 
   const now = new Date();
   await expireLapsedSubmissions(now);
