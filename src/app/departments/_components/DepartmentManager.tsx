@@ -1,7 +1,13 @@
 "use client";
 
-import { useState, useTransition } from "react";
-import { TrashIcon } from "../../dashboard/_components/icons";
+import { useEffect, useRef, useState, useTransition } from "react";
+import {
+  PencilIcon,
+  PlusIcon,
+  SearchIcon,
+  TrashIcon,
+  XIcon,
+} from "../../dashboard/_components/icons";
 import {
   addMembership,
   createDepartment,
@@ -30,6 +36,15 @@ export type DepartmentView = {
   people: Person[];
 };
 
+/** The pseudo-entry in the rail for people holding no seat anywhere. */
+const UNASSIGNED = "__unassigned__";
+
+/**
+ * The org board: a department rail on the left, the selected department's
+ * roster on the right. The company fits in the rail, so switching costs a
+ * click — no scrolling past forty strangers to reach the department you came
+ * to edit. Searching narrows the rail by department AND member name.
+ */
 export function DepartmentManager({
   departments,
   unassigned,
@@ -41,49 +56,289 @@ export function DepartmentManager({
   allPeople: { id: string; name: string }[];
   currentUserId: string;
 }) {
-  const destinations = departments.map((d) => ({ id: d.id, name: d.name }));
+  const [query, setQuery] = useState("");
+  const [selected, setSelected] = useState<string>(
+    departments[0]?.id ?? UNASSIGNED,
+  );
+  // After creating a department, jump to it once the revalidated list lands —
+  // resolved during render below, and cleared by the next manual selection.
+  const [pendingSelect, setPendingSelect] = useState<string | null>(null);
+  const select = (id: string) => {
+    setSelected(id);
+    setPendingSelect(null);
+  };
+
+  const terms = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  const matches = (d: DepartmentView) =>
+    terms.every(
+      (t) =>
+        d.name.toLowerCase().includes(t) ||
+        d.people.some((p) => p.name.toLowerCase().includes(t)),
+    );
+  const visible = departments.filter(matches);
+
+  // If the selected department vanished (deleted), land on the first one —
+  // and if a search hides it, still show it: selection beats filtering.
+  const selectedDept = departments.find((d) => d.id === selected);
+  const pendingDept = pendingSelect
+    ? departments.find(
+        (d) => d.name.toLowerCase() === pendingSelect.toLowerCase(),
+      )
+    : undefined;
+  const activeId =
+    selected === UNASSIGNED && !pendingDept
+      ? UNASSIGNED
+      : (pendingDept ?? selectedDept ?? departments[0])?.id ?? UNASSIGNED;
+
+  const leadSeats = departments.reduce(
+    (s, d) => s + d.people.filter((p) => p.lead).length,
+    0,
+  );
+  const seats = departments.reduce((s, d) => s + d.people.length, 0);
+
+  // ↑/↓ walk the rail like a listbox — the selection (and DOM focus) move.
+  const railIds = [
+    ...visible.map((d) => d.id),
+    ...(unassigned.length > 0 ? [UNASSIGNED] : []),
+  ];
+  const railRef = useRef<HTMLElement>(null);
+  function onRailKeyDown(e: React.KeyboardEvent) {
+    if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
+    // Only when focus is on a rail item — not the composer or search inputs.
+    if (
+      !(e.target instanceof HTMLElement) ||
+      !e.target.hasAttribute("data-rail-id")
+    ) {
+      return;
+    }
+    e.preventDefault();
+    const i = railIds.indexOf(activeId);
+    const next =
+      railIds[
+        (i + (e.key === "ArrowDown" ? 1 : -1) + railIds.length) %
+          railIds.length
+      ];
+    if (!next) return;
+    select(next);
+    railRef.current
+      ?.querySelector<HTMLElement>(`[data-rail-id="${next}"]`)
+      ?.focus();
+  }
 
   return (
     <div className="flex flex-col gap-4">
-      <CreateDepartmentForm />
+      {/* Toolbar: search over everything + the shape of the org at a glance. */}
+      <div className="flex flex-wrap items-center gap-2">
+        <div className="relative min-w-0 flex-1 basis-56">
+          <SearchIcon className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-fg" />
+          <input
+            type="search"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            onKeyDown={(e) => {
+              // Enter jumps to the first match — search becomes a switcher.
+              if (e.key === "Enter" && visible[0]) {
+                select(visible[0].id);
+                e.currentTarget.select();
+              }
+            }}
+            placeholder="Search departments or people…"
+            aria-label="Search departments and people"
+            className="w-full rounded-xl border border-line bg-surface py-2 pl-9 pr-3 text-sm text-ink placeholder:text-muted-fg focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/15"
+          />
+        </div>
+        <div className="flex items-center gap-1.5 text-xs font-semibold text-muted-fg">
+          <StatChip value={departments.length} label="departments" />
+          <StatChip value={leadSeats} label="lead seats" />
+          <StatChip value={seats} label="seats" />
+          {unassigned.length > 0 && (
+            <button
+              type="button"
+              onClick={() => select(UNASSIGNED)}
+              className="rounded-full bg-accent-soft px-2.5 py-1 text-accent-ink transition hover:bg-accent-soft/70"
+            >
+              {unassigned.length} unassigned
+            </button>
+          )}
+        </div>
+      </div>
 
-      {departments.length === 0 ? (
-        <p className="px-1 text-sm text-muted-fg">
-          No departments yet — add the first one above.
-        </p>
-      ) : (
-        <ul className="flex flex-col gap-3">
-          {departments.map((d) => (
-            <DepartmentCard
-              key={d.id}
-              department={d}
+      <div className="grid items-start gap-4 md:grid-cols-[19rem_minmax(0,1fr)]">
+        {/* The rail — every department at a glance. On phones it collapses to
+            a horizontal strip of chips rather than eating the page. */}
+        <aside
+          ref={railRef}
+          onKeyDown={onRailKeyDown}
+          className="rounded-2xl border border-line bg-surface shadow-sm md:sticky md:top-6"
+        >
+          <NewDepartmentComposer onCreated={setPendingSelect} />
+          <ul className="flex gap-1 overflow-x-auto p-2 md:max-h-[32rem] md:flex-col md:overflow-y-auto md:overflow-x-hidden">
+            {visible.map((d) => (
+              <RailItem
+                key={d.id}
+                dept={d}
+                active={d.id === activeId}
+                onSelect={() => select(d.id)}
+              />
+            ))}
+            {visible.length === 0 && (
+              <li className="px-3 py-4 text-center text-xs text-muted-fg">
+                {`Nothing matches “${query.trim()}”.`}
+              </li>
+            )}
+          </ul>
+          {unassigned.length > 0 && (
+            <div className="border-t border-line p-2">
+              <button
+                type="button"
+                data-rail-id={UNASSIGNED}
+                onClick={() => select(UNASSIGNED)}
+                className={`flex w-full shrink-0 items-center gap-2.5 rounded-xl px-3 py-2.5 text-left transition ${
+                  activeId === UNASSIGNED
+                    ? "bg-accent-soft"
+                    : "hover:bg-canvas"
+                }`}
+              >
+                <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-dashed border-accent-ink/40 text-xs text-accent-ink">
+                  ?
+                </span>
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-sm font-semibold text-ink">
+                    No department
+                  </span>
+                  <span className="block truncate text-xs text-muted-fg">
+                    waiting to be placed
+                  </span>
+                </span>
+                <span className="shrink-0 rounded-full bg-accent-soft px-2 py-0.5 text-[11px] font-bold tabular-nums text-accent-ink">
+                  {unassigned.length}
+                </span>
+              </button>
+            </div>
+          )}
+        </aside>
+
+        {/* The focused department — keyed so switching re-enters with rise-in. */}
+        <section
+          key={activeId}
+          className="rise-in min-h-80 rounded-2xl border border-line bg-surface shadow-sm"
+        >
+          {activeId === UNASSIGNED ? (
+            <UnassignedPanel people={unassigned} departments={departments} />
+          ) : (
+            <DepartmentPanel
+              department={departments.find((d) => d.id === activeId)!}
               allPeople={allPeople}
               currentUserId={currentUserId}
             />
-          ))}
-        </ul>
-      )}
-
-      {unassigned.length > 0 && (
-        <section className="rounded-xl border border-dashed border-line bg-surface/50 p-4">
-          <div className="flex items-baseline gap-2">
-            <h2 className="text-sm font-bold text-ink">No department</h2>
-            <span className="text-xs text-muted-fg">
-              mid-onboarding, or their departments were deleted — place them
-            </span>
-          </div>
-          <ul className="mt-2 flex flex-col">
-            {unassigned.map((p) => (
-              <UnassignedRow key={p.id} person={p} destinations={destinations} />
-            ))}
-          </ul>
+          )}
         </section>
-      )}
+      </div>
     </div>
   );
 }
 
-function CreateDepartmentForm() {
+function StatChip({ value, label }: { value: number; label: string }) {
+  return (
+    <span className="whitespace-nowrap rounded-full border border-line bg-surface px-2.5 py-1">
+      <span className="tabular-nums text-ink">{value}</span> {label}
+    </span>
+  );
+}
+
+/** Three overlapping avatar emojis — the dept's composition at a glance. */
+function AvatarStack({ people }: { people: Person[] }) {
+  const shown = people.slice(0, 3);
+  if (shown.length === 0) {
+    return (
+      <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-dashed border-line text-[10px] text-muted-fg">
+        ·
+      </span>
+    );
+  }
+  return (
+    <span className="flex shrink-0 -space-x-1.5">
+      {shown.map((p) => (
+        <span
+          key={p.id}
+          className={`flex h-7 w-7 items-center justify-center rounded-full border-2 border-surface text-xs ${p.bg}`}
+          aria-hidden="true"
+        >
+          {p.emoji}
+        </span>
+      ))}
+    </span>
+  );
+}
+
+/** One department in the rail. */
+function RailItem({
+  dept: d,
+  active,
+  onSelect,
+}: {
+  dept: DepartmentView;
+  active: boolean;
+  onSelect: () => void;
+}) {
+  const leads = d.people.filter((p) => p.lead);
+  return (
+    <li className="shrink-0 md:shrink">
+      <button
+        type="button"
+        data-rail-id={d.id}
+        onClick={onSelect}
+        aria-current={active}
+        className={`flex w-full items-center gap-2.5 rounded-xl px-3 py-2.5 text-left transition ${
+          active
+            ? "bg-brand-soft shadow-[inset_2px_0_0_0_var(--color-brand)]"
+            : "hover:bg-canvas"
+        }`}
+      >
+        <AvatarStack people={d.people} />
+        <span className="min-w-0 flex-1">
+          <span className="flex items-center gap-1.5">
+            <span
+              className={`truncate text-sm font-semibold ${active ? "text-brand" : "text-ink"}`}
+            >
+              {d.name}
+            </span>
+            {d.mini && <MiniBadge />}
+          </span>
+          <span className="block truncate text-xs text-muted-fg">
+            {leads.length > 0
+              ? `${d.mini ? "Head" : "Lead"}: ${leads.map((l) => l.name.split(" ")[0]).join(", ")}`
+              : d.mini
+                ? "Runs itself"
+                : "No lead yet"}
+          </span>
+        </span>
+        <span className="shrink-0 rounded-full bg-canvas px-2 py-0.5 text-[11px] font-bold tabular-nums text-muted-fg">
+          {d.people.length}
+        </span>
+      </button>
+    </li>
+  );
+}
+
+function MiniBadge() {
+  return (
+    <span
+      className="shrink-0 rounded-full bg-canvas px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-muted-fg"
+      title="Mini department — its head owes no meeting and no weekly submission, so no fines, and the first person to join a headless one leads it."
+    >
+      Mini
+    </span>
+  );
+}
+
+/** The rail's top row: a button that unfolds into the create form. */
+function NewDepartmentComposer({
+  onCreated,
+}: {
+  onCreated: (name: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
   const [name, setName] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
@@ -96,6 +351,8 @@ function CreateDepartmentForm() {
       try {
         await createDepartment(value);
         setName("");
+        setOpen(false);
+        onCreated(value);
       } catch (e) {
         setError(e instanceof Error ? e.message : "Couldn't add it.");
       }
@@ -103,32 +360,58 @@ function CreateDepartmentForm() {
   }
 
   return (
-    <div className="rounded-xl border border-line bg-surface p-4">
-      <div className="flex flex-wrap items-center gap-2">
-        <input
-          type="text"
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          onKeyDown={(e) => e.key === "Enter" && submit()}
-          placeholder="New department — e.g. Design"
-          maxLength={60}
-          className="min-w-0 flex-1 rounded-lg border border-line px-3 py-2 text-sm text-ink placeholder:text-muted-fg focus:border-brand focus:outline-none"
-        />
+    <div className="border-b border-line p-2">
+      {open ? (
+        <div className="rise-in">
+          <div className="flex items-center gap-1.5">
+            <input
+              type="text"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") submit();
+                if (e.key === "Escape") setOpen(false);
+              }}
+              placeholder="e.g. Design"
+              maxLength={60}
+              autoFocus
+              className="min-w-0 flex-1 rounded-lg border border-line px-2.5 py-1.5 text-sm text-ink placeholder:text-muted-fg focus:border-brand focus:outline-none"
+            />
+            <button
+              type="button"
+              disabled={isPending || name.trim() === ""}
+              onClick={submit}
+              className="shrink-0 rounded-lg bg-brand px-2.5 py-1.5 text-xs font-semibold text-white transition hover:bg-brand-dark disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {isPending ? "…" : "Add"}
+            </button>
+            <button
+              type="button"
+              onClick={() => setOpen(false)}
+              aria-label="Cancel"
+              className="shrink-0 rounded-lg p-1.5 text-muted-fg transition hover:bg-canvas hover:text-ink"
+            >
+              <XIcon className="h-3.5 w-3.5" />
+            </button>
+          </div>
+          {error && <p className="mt-1.5 px-1 text-xs text-red-600">{error}</p>}
+        </div>
+      ) : (
         <button
           type="button"
-          disabled={isPending || name.trim() === ""}
-          onClick={submit}
-          className="shrink-0 whitespace-nowrap rounded-lg bg-brand px-4 py-2 text-sm font-semibold text-white transition hover:bg-brand-dark disabled:cursor-not-allowed disabled:opacity-50"
+          onClick={() => setOpen(true)}
+          className="flex w-full items-center gap-2 rounded-xl border border-dashed border-line px-3 py-2 text-xs font-semibold text-muted-fg transition hover:border-brand hover:text-brand"
         >
-          {isPending ? "Adding…" : "Add department"}
+          <PlusIcon className="h-3.5 w-3.5" />
+          New department
         </button>
-      </div>
-      {error && <p className="mt-2 text-xs text-red-600">{error}</p>}
+      )}
     </div>
   );
 }
 
-function DepartmentCard({
+/** The selected department: header actions, roster, add-person picker. */
+function DepartmentPanel({
   department: d,
   allPeople,
   currentUserId,
@@ -139,6 +422,7 @@ function DepartmentCard({
 }) {
   const [renaming, setRenaming] = useState(false);
   const [name, setName] = useState(d.name);
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
 
@@ -171,64 +455,49 @@ function DepartmentCard({
   }
 
   return (
-    <li className="rounded-xl border border-line bg-surface p-4">
-      <div className="flex flex-wrap items-center gap-2">
-        {renaming ? (
-          <span className="flex min-w-0 flex-1 items-center gap-2">
-            <input
-              type="text"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && saveRename()}
-              maxLength={60}
-              autoFocus
-              className="min-w-0 flex-1 rounded-lg border border-line px-3 py-1.5 text-sm font-bold text-ink focus:border-brand focus:outline-none"
-            />
-            <button
-              type="button"
-              disabled={isPending}
-              onClick={saveRename}
-              className="shrink-0 rounded-lg bg-brand px-2.5 py-1 text-xs font-semibold text-white transition hover:bg-brand-dark disabled:opacity-50"
-            >
-              {isPending ? "Saving…" : "Save"}
-            </button>
-            <button
-              type="button"
-              disabled={isPending}
-              onClick={() => {
-                setRenaming(false);
-                setName(d.name);
-              }}
-              className="shrink-0 rounded-lg px-2 py-1 text-xs font-medium text-muted-fg transition hover:bg-canvas"
-            >
-              Cancel
-            </button>
+    <>
+      {/* Header: name (click the pencil to rename in place), the meta line,
+          and the three department verbs tucked into quiet controls. */}
+      <header className="border-b border-line px-5 py-4">
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+          {renaming ? (
+            <span className="flex min-w-0 flex-1 items-center gap-2">
+              <input
+                type="text"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") saveRename();
+                  if (e.key === "Escape") {
+                    setRenaming(false);
+                    setName(d.name);
+                  }
+                }}
+                onBlur={saveRename}
+                maxLength={60}
+                autoFocus
+                className="min-w-0 flex-1 rounded-lg border border-line px-2.5 py-1 text-base font-bold text-ink focus:border-brand focus:outline-none"
+              />
+            </span>
+          ) : (
+            <h2 className="flex min-w-0 items-center gap-2 text-base font-bold text-ink">
+              <span className="truncate">{d.name}</span>
+              {d.mini && <MiniBadge />}
+            </h2>
+          )}
+          <span className="text-xs tabular-nums text-muted-fg">
+            {d.people.length} {d.people.length === 1 ? "seat" : "seats"}
           </span>
-        ) : (
-          <>
-            <h2 className="text-sm font-bold text-ink">{d.name}</h2>
-            <span className="rounded-full bg-canvas px-2 py-0.5 text-[11px] font-bold tabular-nums text-muted-fg">
-              {d.people.length}
-            </span>
-            {d.mini && (
-              <span
-                className="shrink-0 rounded-full bg-canvas px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-muted-fg"
-                title="Mini department — its head owes no meeting and no weekly submission, so no fines, and the first person to join a headless one leads it."
-              >
-                Mini
-              </span>
-            )}
-            <span className="min-w-0 flex-1 truncate text-xs text-muted-fg">
-              {leads.length > 0 ? (
-                `${d.mini ? "Head" : "Lead"}: ${leads.map((l) => l.name).join(", ")}`
-              ) : d.mini ? (
-                <span className="text-muted-fg">
-                  No head yet — the first to join becomes it
-                </span>
-              ) : (
-                <span className="text-amber-700">No lead yet</span>
-              )}
-            </span>
+          <span className="ms-auto flex items-center gap-1">
+            <button
+              type="button"
+              onClick={() => setRenaming(true)}
+              aria-label={`Rename ${d.name}`}
+              title="Rename"
+              className="rounded-lg p-1.5 text-muted-fg transition hover:bg-canvas hover:text-ink"
+            >
+              <PencilIcon className="h-4 w-4" />
+            </button>
             <button
               type="button"
               disabled={isPending}
@@ -238,126 +507,115 @@ function DepartmentCard({
                   ? "Make it a full department — its lead takes on the Monday meeting and the weekly deadline."
                   : "Make it a mini department — its lead stops owing the Monday meeting and the weekly deadline."
               }
-              className="shrink-0 rounded-lg border border-line px-2.5 py-1 text-xs font-medium text-muted-fg transition hover:bg-canvas hover:text-ink disabled:opacity-50"
+              className={`rounded-full border px-2.5 py-1 text-[11px] font-semibold transition disabled:opacity-50 ${
+                d.mini
+                  ? "border-line text-muted-fg hover:bg-canvas hover:text-ink"
+                  : "border-line text-muted-fg hover:bg-canvas hover:text-ink"
+              }`}
             >
               {d.mini ? "Make full" : "Make mini"}
             </button>
             <button
               type="button"
-              onClick={() => setRenaming(true)}
-              className="shrink-0 rounded-lg border border-line px-2.5 py-1 text-xs font-medium text-muted-fg transition hover:bg-canvas hover:text-ink"
+              onClick={() => setConfirmingDelete(true)}
+              aria-label={`Delete ${d.name}`}
+              title="Delete department"
+              className="rounded-lg p-1.5 text-muted-fg transition hover:bg-red-500/10 hover:text-red-600"
             >
-              Rename
+              <TrashIcon className="h-4 w-4" />
             </button>
-            <DeleteDepartmentButton department={d} />
-          </>
-        )}
-      </div>
-      {error && <p className="mt-1.5 text-xs text-red-600">{error}</p>}
+          </span>
+        </div>
+        <p className="mt-1 text-xs text-muted-fg">
+          {leads.length > 0 ? (
+            `${d.mini ? "Head" : "Lead"}: ${leads.map((l) => l.name).join(", ")}`
+          ) : d.mini ? (
+            "No head yet — the first to join becomes it"
+          ) : (
+            <span className="font-medium text-accent-ink">No lead yet</span>
+          )}
+          {d.mini && leads.length > 0 && " · owes nothing"}
+        </p>
 
+        {/* Inline delete confirm — no modal, the context stays visible. */}
+        {confirmingDelete && (
+          <div className="rise-in mt-3 flex flex-wrap items-center gap-2 rounded-xl border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs">
+            <span className="font-medium text-red-600">
+              {d.people.length > 0
+                ? `Delete ${d.name}? ${d.people.length} ${d.people.length === 1 ? "seat goes" : "seats go"} away — the people keep their accounts and other departments.`
+                : `Delete ${d.name}?`}
+            </span>
+            <span className="ms-auto flex items-center gap-1.5">
+              <button
+                type="button"
+                disabled={isPending}
+                onClick={() =>
+                  startTransition(async () => void (await deleteDepartment(d.id)))
+                }
+                className="rounded-lg bg-red-500 px-2.5 py-1 font-semibold text-white transition hover:bg-red-600 disabled:opacity-50"
+              >
+                {isPending ? "Deleting…" : "Delete"}
+              </button>
+              <button
+                type="button"
+                disabled={isPending}
+                onClick={() => setConfirmingDelete(false)}
+                className="rounded-lg px-2 py-1 font-medium text-muted-fg transition hover:bg-canvas"
+              >
+                Cancel
+              </button>
+            </span>
+          </div>
+        )}
+        {error && <p className="mt-2 text-xs text-red-600">{error}</p>}
+      </header>
+
+      {/* Roster. Member verbs stay hidden until the row is hovered (always
+          shown on touch, where there's no hover). */}
       {d.people.length > 0 ? (
-        <ul className="mt-2 flex flex-col border-t border-line pt-1">
+        <ul className="flex flex-col py-1.5">
           {d.people.map((p) => (
-            <MembershipRow
+            <MemberRow
               key={p.id}
               person={p}
               departmentId={d.id}
+              mini={d.mini}
               isSelf={p.id === currentUserId}
             />
           ))}
         </ul>
       ) : (
-        <p className="mt-2 border-t border-line pt-2.5 text-xs text-muted-fg">
+        <p className="m-5 rounded-xl border border-dashed border-line px-4 py-6 text-center text-sm text-muted-fg">
           Nobody here yet — add people below, or let new joiners pick it at
           onboarding.
         </p>
       )}
 
       {addable.length > 0 && (
-        <div className="mt-2 border-t border-line pt-2">
-          <select
-            value=""
+        <footer className="border-t border-line px-5 py-3">
+          <Picker
+            buttonLabel={`Add someone to ${d.name}`}
+            searchPlaceholder="Type a name…"
+            items={addable.map((p) => ({ id: p.id, label: p.name }))}
+            onPick={(id) => run(() => addMembership(id, d.id))}
             disabled={isPending}
-            onChange={(e) =>
-              e.target.value && run(() => addMembership(e.target.value, d.id))
-            }
-            aria-label={`Add a person to ${d.name}`}
-            className="rounded-lg border border-line bg-surface px-2 py-1 text-xs font-medium text-muted-fg transition hover:text-ink focus:border-brand focus:outline-none disabled:opacity-50"
-          >
-            <option value="" disabled>
-              {isPending ? "Working…" : "Add a person as a member…"}
-            </option>
-            {addable.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.name}
-              </option>
-            ))}
-          </select>
-        </div>
+          />
+        </footer>
       )}
-    </li>
+    </>
   );
 }
 
-function DeleteDepartmentButton({ department: d }: { department: DepartmentView }) {
-  const [confirming, setConfirming] = useState(false);
-  const [isPending, startTransition] = useTransition();
-
-  if (confirming) {
-    return (
-      <span className="flex shrink-0 items-center gap-1 text-xs">
-        <button
-          type="button"
-          disabled={isPending}
-          onClick={() =>
-            startTransition(async () => void (await deleteDepartment(d.id)))
-          }
-          className="whitespace-nowrap rounded bg-red-500 px-2 py-1 font-medium text-white transition hover:bg-red-600 disabled:opacity-50"
-          title={
-            d.people.length > 0
-              ? `${d.people.length} ${d.people.length === 1 ? "seat goes" : "seats go"} away — the people keep their accounts and other departments`
-              : undefined
-          }
-        >
-          {isPending
-            ? "Deleting…"
-            : d.people.length > 0
-              ? `Delete (${d.people.length} ${d.people.length === 1 ? "seat" : "seats"})`
-              : "Delete"}
-        </button>
-        <button
-          type="button"
-          disabled={isPending}
-          onClick={() => setConfirming(false)}
-          className="rounded px-2 py-1 text-muted-fg transition hover:bg-canvas"
-        >
-          Cancel
-        </button>
-      </span>
-    );
-  }
-
-  return (
-    <button
-      type="button"
-      onClick={() => setConfirming(true)}
-      className="shrink-0 text-muted-fg transition hover:text-red-500"
-      aria-label={`Delete ${d.name}`}
-      title="Delete department"
-    >
-      <TrashIcon className="h-4 w-4" />
-    </button>
-  );
-}
-
-/** One seat: a person inside one department card, with per-seat controls. */
-function MembershipRow({
+/** One seat in the roster — hover (or touch) reveals the per-seat verbs. */
+function MemberRow({
   person: p,
   departmentId,
+  mini,
   isSelf,
 }: {
   person: Person;
   departmentId: string;
+  mini: boolean;
   isSelf: boolean;
 }) {
   const [error, setError] = useState<string | null>(null);
@@ -375,16 +633,18 @@ function MembershipRow({
   }
 
   return (
-    <li className="flex flex-wrap items-center gap-2 border-b border-line/60 py-2 last:border-0">
+    <li className="group flex items-center gap-3 px-5 py-2 transition hover:bg-canvas">
       <span
-        className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-base ${p.bg}`}
+        className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-line text-base ${p.bg}`}
         aria-hidden="true"
       >
         {p.emoji}
       </span>
       <span className="min-w-0 flex-1">
         <span className="flex items-center gap-2 text-sm font-medium text-ink">
-          <span className="truncate">{p.name}</span>
+          <span className="truncate" title={p.email ?? undefined}>
+            {p.name}
+          </span>
           {isSelf && (
             <span className="shrink-0 text-xs font-normal text-muted-fg">
               (you)
@@ -392,60 +652,86 @@ function MembershipRow({
           )}
           {p.lead && (
             <span className="shrink-0 rounded-full bg-brand-soft px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-brand">
-              Dep. lead
+              {mini ? "Head" : "Dep. lead"}
             </span>
           )}
         </span>
         {error && <span className="block text-xs text-red-600">{error}</span>}
       </span>
 
-      {/* Flip the hat worn in THIS department only. */}
-      <button
-        type="button"
-        disabled={isPending}
-        onClick={() =>
-          run(() =>
-            setMembershipRole(p.id, departmentId, p.lead ? "MEMBER" : "LEAD"),
-          )
-        }
-        title={
-          p.lead
-            ? "Member here: no expectations from this seat"
-            : "Lead here: expected at Monday meetings and to submit weekly/monthly goals"
-        }
-        className="shrink-0 whitespace-nowrap rounded-lg border border-line px-2.5 py-1 text-xs font-medium text-muted-fg transition hover:bg-canvas hover:text-ink disabled:opacity-50"
-      >
-        {isPending ? "…" : p.lead ? "Make member" : "Make lead"}
-      </button>
-
-      <button
-        type="button"
-        disabled={isPending}
-        onClick={() => run(() => removeMembership(p.id, departmentId))}
-        title="Remove from this department (their other departments stay)"
-        className="shrink-0 whitespace-nowrap rounded-lg border border-line px-2.5 py-1 text-xs font-medium text-muted-fg transition hover:bg-canvas hover:text-ink disabled:opacity-50"
-      >
-        Remove
-      </button>
+      <span className="flex shrink-0 items-center gap-1 transition md:opacity-0 md:group-focus-within:opacity-100 md:group-hover:opacity-100">
+        {/* Flip the hat worn in THIS department only. */}
+        <button
+          type="button"
+          disabled={isPending}
+          onClick={() =>
+            run(() =>
+              setMembershipRole(p.id, departmentId, p.lead ? "MEMBER" : "LEAD"),
+            )
+          }
+          title={
+            p.lead
+              ? "Member here: no expectations from this seat"
+              : "Lead here: expected at Monday meetings and to submit weekly/monthly goals"
+          }
+          className="whitespace-nowrap rounded-lg border border-line bg-surface px-2 py-1 text-[11px] font-semibold text-muted-fg transition hover:border-brand hover:text-brand disabled:opacity-50"
+        >
+          {p.lead ? "Make member" : "Make lead"}
+        </button>
+        <button
+          type="button"
+          disabled={isPending}
+          onClick={() => run(() => removeMembership(p.id, departmentId))}
+          title="Remove from this department (their other departments stay)"
+          aria-label={`Remove ${p.name} from this department`}
+          className="rounded-lg p-1.5 text-muted-fg transition hover:bg-red-500/10 hover:text-red-600 disabled:opacity-50"
+        >
+          <TrashIcon className="h-3.5 w-3.5" />
+        </button>
+      </span>
     </li>
   );
 }
 
-/** Someone holding no seat anywhere — a select to give them their first one. */
+/** People with no seat — place each via a department picker. */
+function UnassignedPanel({
+  people,
+  departments,
+}: {
+  people: Person[];
+  departments: DepartmentView[];
+}) {
+  return (
+    <>
+      <header className="border-b border-line px-5 py-4">
+        <h2 className="text-base font-bold text-ink">No department</h2>
+        <p className="mt-1 text-xs text-muted-fg">
+          Mid-onboarding, or their departments were deleted — place them.
+        </p>
+      </header>
+      <ul className="flex flex-col py-1.5">
+        {people.map((p) => (
+          <UnassignedRow key={p.id} person={p} departments={departments} />
+        ))}
+      </ul>
+    </>
+  );
+}
+
 function UnassignedRow({
   person: p,
-  destinations,
+  departments,
 }: {
   person: Person;
-  destinations: { id: string; name: string }[];
+  departments: DepartmentView[];
 }) {
   const [error, setError] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
 
   return (
-    <li className="flex flex-wrap items-center gap-2 border-b border-line/60 py-2 last:border-0">
+    <li className="group flex items-center gap-3 px-5 py-2 transition hover:bg-canvas">
       <span
-        className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-base ${p.bg}`}
+        className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-line text-base ${p.bg}`}
         aria-hidden="true"
       >
         {p.emoji}
@@ -456,33 +742,128 @@ function UnassignedRow({
         </span>
         {error && <span className="block text-xs text-red-600">{error}</span>}
       </span>
-      <select
-        value=""
+      <Picker
+        buttonLabel="Add to department…"
+        searchPlaceholder="Type a department…"
+        align="right"
+        items={departments.map((d) => ({ id: d.id, label: d.name }))}
         disabled={isPending}
-        onChange={(e) => {
-          const dept = e.target.value;
-          if (!dept) return;
+        onPick={(deptId) => {
           setError(null);
           startTransition(async () => {
             try {
-              await addMembership(p.id, dept);
+              await addMembership(p.id, deptId);
             } catch (err) {
-              setError(err instanceof Error ? err.message : "That didn't work.");
+              setError(
+                err instanceof Error ? err.message : "That didn't work.",
+              );
             }
           });
         }}
-        aria-label={`Add ${p.name} to a department`}
-        className="shrink-0 rounded-lg border border-line bg-surface px-2 py-1 text-xs font-medium text-muted-fg transition hover:text-ink focus:border-brand focus:outline-none disabled:opacity-50"
-      >
-        <option value="" disabled>
-          {isPending ? "Working…" : "Add to department…"}
-        </option>
-        {destinations.map((dest) => (
-          <option key={dest.id} value={dest.id}>
-            {dest.name}
-          </option>
-        ))}
-      </select>
+      />
     </li>
+  );
+}
+
+/**
+ * A button that opens a little searchable menu — replaces the bare <select>
+ * so picking from 40 people or 7 departments is a two-keystroke job. Closes
+ * on Escape, on outside click, and after a pick.
+ */
+function Picker({
+  buttonLabel,
+  searchPlaceholder,
+  items,
+  onPick,
+  disabled,
+  align = "left",
+}: {
+  buttonLabel: string;
+  searchPlaceholder: string;
+  items: { id: string; label: string }[];
+  onPick: (id: string) => void;
+  disabled?: boolean;
+  align?: "left" | "right";
+}) {
+  const [open, setOpen] = useState(false);
+  const [q, setQ] = useState("");
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) {
+        setOpen(false);
+      }
+    };
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setOpen(false);
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDown);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
+
+  const shown = items.filter((i) =>
+    i.label.toLowerCase().includes(q.trim().toLowerCase()),
+  );
+
+  return (
+    <div ref={ref} className="relative inline-block">
+      <button
+        type="button"
+        disabled={disabled}
+        onClick={() => {
+          setOpen((v) => !v);
+          setQ("");
+        }}
+        className="inline-flex items-center gap-1.5 rounded-lg border border-dashed border-line px-2.5 py-1.5 text-xs font-semibold text-muted-fg transition hover:border-brand hover:text-brand disabled:opacity-50"
+      >
+        <PlusIcon className="h-3.5 w-3.5" />
+        {buttonLabel}
+      </button>
+      {open && (
+        <div
+          className={`pop-in absolute bottom-full z-20 mb-1.5 w-64 rounded-xl border border-line bg-surface p-2 shadow-lg ${
+            align === "right" ? "right-0" : "left-0"
+          }`}
+          style={{ ["--pop-origin" as string]: "bottom left" }}
+          role="listbox"
+        >
+          <input
+            type="search"
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            placeholder={searchPlaceholder}
+            autoFocus
+            className="mb-1.5 w-full rounded-lg border border-line px-2.5 py-1.5 text-xs text-ink placeholder:text-muted-fg focus:border-brand focus:outline-none"
+          />
+          <ul className="max-h-56 overflow-y-auto">
+            {shown.map((i) => (
+              <li key={i.id}>
+                <button
+                  type="button"
+                  role="option"
+                  aria-selected={false}
+                  onClick={() => {
+                    setOpen(false);
+                    onPick(i.id);
+                  }}
+                  className="w-full truncate rounded-lg px-2.5 py-1.5 text-left text-xs font-medium text-ink transition hover:bg-canvas"
+                >
+                  {i.label}
+                </button>
+              </li>
+            ))}
+            {shown.length === 0 && (
+              <li className="px-2.5 py-2 text-xs text-muted-fg">
+                No matches.
+              </li>
+            )}
+          </ul>
+        </div>
+      )}
+    </div>
   );
 }

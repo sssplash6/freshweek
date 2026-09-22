@@ -84,29 +84,14 @@ export default async function DepartmentsPage() {
     name: u.name ?? u.email ?? "—",
   }));
 
-  const leadCount = departments.reduce(
-    (s, d) => s + d.memberships.filter((m) => m.role === "LEAD").length,
-    0,
-  );
-  const seatCount = departments.reduce((s, d) => s + d.memberships.length, 0);
-
   return (
-    <div className="mx-auto w-full max-w-5xl flex-1 px-4 py-8">
-      <header className="mb-6 flex items-start justify-between gap-4">
+    <div className="mx-auto w-full max-w-6xl flex-1 px-4 py-8">
+      <header className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between sm:gap-4">
         <div>
           <div className="text-xs font-semibold uppercase tracking-widest text-brand">
             Admin
           </div>
           <h1 className="mt-1 text-2xl font-bold text-ink">Departments</h1>
-          <p className="mt-1 text-sm text-muted-fg">
-            {`${departments.length} departments · ${leadCount} lead seats · ${seatCount} seats across ${users.length} people. `}
-            One person can sit in several departments — lead of one, member of
-            another — and each seat carries its own role. Leads owe Monday
-            meetings and weekly/monthly submissions; members owe neither. New
-            joiners pick their first department at onboarding and can join more
-            from their profile. A mini department is the exception: its head is
-            simply whoever joined first, and owes nothing.
-          </p>
         </div>
         <BackLink href="/admin" label="Team overview" />
       </header>
