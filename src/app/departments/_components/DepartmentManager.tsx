@@ -221,7 +221,7 @@ export function DepartmentManager({
         {/* The focused department — keyed so switching re-enters with rise-in. */}
         <section
           key={activeId}
-          className="rise-in min-h-80 rounded-2xl border border-line bg-surface shadow-sm"
+          className="rise-in flex min-h-80 flex-col rounded-2xl border border-line bg-surface shadow-sm"
         >
           {activeId === UNASSIGNED ? (
             <UnassignedPanel people={unassigned} departments={departments} />
@@ -458,7 +458,7 @@ function DepartmentPanel({
     <>
       {/* Header: name (click the pencil to rename in place), the meta line,
           and the three department verbs tucked into quiet controls. */}
-      <header className="border-b border-line px-5 py-4">
+      <header className="shrink-0 border-b border-line px-5 py-4">
         <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
           {renaming ? (
             <span className="flex min-w-0 flex-1 items-center gap-2">
@@ -572,27 +572,29 @@ function DepartmentPanel({
 
       {/* Roster. Member verbs stay hidden until the row is hovered (always
           shown on touch, where there's no hover). */}
-      {d.people.length > 0 ? (
-        <ul className="flex flex-col py-1.5">
-          {d.people.map((p) => (
-            <MemberRow
-              key={p.id}
-              person={p}
-              departmentId={d.id}
-              mini={d.mini}
-              isSelf={p.id === currentUserId}
-            />
-          ))}
-        </ul>
-      ) : (
-        <p className="m-5 rounded-xl border border-dashed border-line px-4 py-6 text-center text-sm text-muted-fg">
-          Nobody here yet — add people below, or let new joiners pick it at
-          onboarding.
-        </p>
-      )}
+      <div className="flex-1 overflow-y-auto">
+        {d.people.length > 0 ? (
+          <ul className="flex flex-col py-1.5">
+            {d.people.map((p) => (
+              <MemberRow
+                key={p.id}
+                person={p}
+                departmentId={d.id}
+                mini={d.mini}
+                isSelf={p.id === currentUserId}
+              />
+            ))}
+          </ul>
+        ) : (
+          <p className="m-5 rounded-xl border border-dashed border-line px-4 py-6 text-center text-sm text-muted-fg">
+            Nobody here yet — add people below, or let new joiners pick it at
+            onboarding.
+          </p>
+        )}
+      </div>
 
       {addable.length > 0 && (
-        <footer className="border-t border-line px-5 py-3">
+        <footer className="shrink-0 border-t border-line px-5 py-3">
           <Picker
             buttonLabel={`Add someone to ${d.name}`}
             searchPlaceholder="Type a name…"
@@ -703,17 +705,19 @@ function UnassignedPanel({
 }) {
   return (
     <>
-      <header className="border-b border-line px-5 py-4">
+      <header className="shrink-0 border-b border-line px-5 py-4">
         <h2 className="text-base font-bold text-ink">No department</h2>
         <p className="mt-1 text-xs text-muted-fg">
           Mid-onboarding, or their departments were deleted — place them.
         </p>
       </header>
-      <ul className="flex flex-col py-1.5">
-        {people.map((p) => (
-          <UnassignedRow key={p.id} person={p} departments={departments} />
-        ))}
-      </ul>
+      <div className="flex-1 overflow-y-auto">
+        <ul className="flex flex-col py-1.5">
+          {people.map((p) => (
+            <UnassignedRow key={p.id} person={p} departments={departments} />
+          ))}
+        </ul>
+      </div>
     </>
   );
 }
@@ -746,6 +750,7 @@ function UnassignedRow({
         buttonLabel="Add to department…"
         searchPlaceholder="Type a department…"
         align="right"
+        side="down"
         items={departments.map((d) => ({ id: d.id, label: d.name }))}
         disabled={isPending}
         onPick={(deptId) => {
@@ -777,6 +782,7 @@ function Picker({
   onPick,
   disabled,
   align = "left",
+  side = "up",
 }: {
   buttonLabel: string;
   searchPlaceholder: string;
@@ -784,6 +790,8 @@ function Picker({
   onPick: (id: string) => void;
   disabled?: boolean;
   align?: "left" | "right";
+  /** `down` for pickers inside the scrollable roster — up would clip. */
+  side?: "up" | "down";
 }) {
   const [open, setOpen] = useState(false);
   const [q, setQ] = useState("");
@@ -825,10 +833,13 @@ function Picker({
       </button>
       {open && (
         <div
-          className={`pop-in absolute bottom-full z-20 mb-1.5 w-64 rounded-xl border border-line bg-surface p-2 shadow-lg ${
-            align === "right" ? "right-0" : "left-0"
-          }`}
-          style={{ ["--pop-origin" as string]: "bottom left" }}
+          className={`pop-in absolute z-20 w-64 rounded-xl border border-line bg-surface p-2 shadow-lg ${
+            side === "up" ? "bottom-full mb-1.5" : "top-full mt-1.5"
+          } ${align === "right" ? "right-0" : "left-0"}`}
+          style={{
+            ["--pop-origin" as string]:
+              side === "up" ? "bottom left" : "top left",
+          }}
           role="listbox"
         >
           <input
