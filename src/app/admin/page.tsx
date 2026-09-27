@@ -406,6 +406,7 @@ export default async function AdminPage({
       submittedAt: Date | null;
       notClosed?: boolean;
       aheadLabel?: string | null;
+      behindLabel?: string | null;
       goals: PeriodGoal[];
     },
   ): AdminUser {
@@ -419,6 +420,7 @@ export default async function AdminPage({
       weekLabel: fields.label,
       notClosed: fields.notClosed ?? false,
       aheadLabel: fields.aheadLabel ?? null,
+      behindLabel: fields.behindLabel ?? null,
       late: fields.late,
       submittedAtLabel: fields.submittedAt
         ? formatDateTimeTz(fields.submittedAt)
@@ -515,12 +517,19 @@ export default async function AdminPage({
       live && wk && live.startDate.getTime() > wk.startDate.getTime()
         ? fmtRange(live.startDate, live.endDate)
         : null;
+    // The mirror case: their live week is still one from before this cycle —
+    // they never closed it, so their dashboard is stuck on it.
+    const behind =
+      live && live.startDate.getTime() < cutoff
+        ? fmtRange(live.startDate, live.endDate)
+        : null;
     return baseUser(u, {
       label: wk ? fmtRange(wk.startDate, wk.endDate) : null,
       // Members owe no deadline, so nothing of theirs reads as late.
       late: isExpectedLead(u.memberships) && (wk?.submittedLate ?? false),
       submittedAt: wk?.submittedAt ?? null,
       aheadLabel: ahead,
+      behindLabel: behind,
       goals: wk?.goals ?? [],
     });
   });

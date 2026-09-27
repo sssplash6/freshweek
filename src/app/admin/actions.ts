@@ -61,11 +61,13 @@ function wasMislabelled(week: {
 }
 
 /**
- * Put a user who's running ahead of the team's cycle back on the current
- * calendar week. Three shapes, none of which lose work:
+ * Put a user who's running ahead of (or stuck behind) the team's cycle on the
+ * current calendar week. Three shapes, none of which lose work:
  *
  *  - Nothing occupies the current week: re-date their week onto it. Goals and
- *    subtasks ride along, since they belong to the same week row.
+ *    subtasks ride along, since they belong to the same week row. Moving a
+ *    stuck week forward also clears its submit stamp — that submit was for
+ *    the old cycle, and must not read as this one's.
  *  - The current week is taken by a week that was submitted before it began —
  *    the launch offset. Their whole chain of weeks is a week late, so slide the
  *    run back: the live week takes the current slot and each week it displaces
@@ -108,16 +110,27 @@ export async function moveUserWeekToCurrent(userId: string) {
   const live = weeks.find((w) => w.isCurrent);
   if (!live) throw new Error("That user has no current week.");
 
-  const { start, end } = getWeekBounds(new Date());
+  // The team's week, not the calendar one: after Sunday 12:00 the cycle has
+  // already rolled to the coming Monday (same split the admin view uses).
+  const { start, end } = getWeekBounds(currentSubmissionCycle().weekStart);
   if (toYmd(live.startDate) === toYmd(start)) return; // already on this week
 
   const closed = weeks.find(
     (w) => !w.isCurrent && toYmd(w.startDate) === toYmd(start),
   );
   if (!closed) {
+    const behind = live.startDate.getTime() < start.getTime();
     await prisma.week.update({
       where: { id: live.id },
-      data: { startDate: start, endDate: end },
+      data: {
+        startDate: start,
+        endDate: end,
+        ...(behind && {
+          submittedAt: null,
+          submittedLate: false,
+          goalsLocked: false,
+        }),
+      },
     });
   } else if (wasMislabelled(closed)) {
     // Slide the whole chain back a week. Each pass parks a week on the slot it

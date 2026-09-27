@@ -73,6 +73,9 @@ export type AdminUser = {
   // Set when they've already closed this week and started a later one — the
   // range of that later week, which is what their own dashboard shows.
   aheadLabel: string | null;
+  // Set when their live week is still one from before this cycle (never
+  // closed) — the range of that stuck week.
+  behindLabel: string | null;
   late: boolean;
   submittedAtLabel: string | null;
   percent: number;
@@ -260,6 +263,14 @@ function UserRow({
                 Week ahead
               </span>
             )}
+            {u.behindLabel && (
+              <span
+                className="shrink-0 rounded-full bg-orange-50 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-orange-700"
+                title={`Still on ${u.behindLabel} — never closed it.`}
+              >
+                Week behind
+              </span>
+            )}
             {u.lead && u.goalCount === 0 && (
               <span className="shrink-0 rounded-full bg-amber-50 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-amber-700">
                 No goals
@@ -373,10 +384,13 @@ function UserRow({
         >
           Bonus
         </button>
-        {/* Only for someone whose live week is ahead of this cycle's — the one
-            case there's anything to repair. */}
-        {u.aheadLabel && (
-          <FixWeekButton userId={u.id} aheadLabel={u.aheadLabel} />
+        {/* Only for someone whose live week is off this cycle's — ahead or
+            behind — the cases there's anything to repair. */}
+        {(u.aheadLabel ?? u.behindLabel) && (
+          <FixWeekButton
+            userId={u.id}
+            offLabel={(u.aheadLabel ?? u.behindLabel)!}
+          />
         )}
         {isSelf ? (
           // Invisible stand-in matching the delete button's footprint (px-4
@@ -817,16 +831,16 @@ function AddBonusForm({
   );
 }
 
-// Pulls someone who's running ahead back onto the current week: re-dates their
-// live week, or — if they got ahead by closing this week early — reopens the week
-// they closed and folds the ahead one into it. Either way no goals are lost, so
+// Pulls someone who's running ahead (or stuck behind) onto the current week:
+// re-dates their live week, or — if they got ahead by closing this week early —
+// reopens the week they closed and folds the ahead one into it. Either way no goals are lost, so
 // one confirmation step is enough.
 function FixWeekButton({
   userId,
-  aheadLabel,
+  offLabel,
 }: {
   userId: string;
-  aheadLabel: string;
+  offLabel: string;
 }) {
   const [confirming, setConfirming] = useState(false);
   const [isPending, startTransition] = useTransition();
@@ -844,7 +858,7 @@ function FixWeekButton({
             })
           }
           className="whitespace-nowrap rounded bg-brand px-2 py-1 font-medium text-white transition hover:bg-brand-dark disabled:opacity-50"
-          title={`Bring them back from ${aheadLabel} to the current week (goals kept)`}
+          title={`Bring them from ${offLabel} to the current week (goals kept)`}
         >
           {isPending ? "Moving…" : "Move to this week"}
         </button>
@@ -865,7 +879,7 @@ function FixWeekButton({
       type="button"
       onClick={() => setConfirming(true)}
       className="shrink-0 whitespace-nowrap rounded-lg border border-orange-200 px-2.5 py-1 text-xs font-medium text-orange-700 transition hover:bg-orange-50"
-      title={`They're on ${aheadLabel} — move them back to the current week (goals kept)`}
+      title={`They're on ${offLabel} — move them to the current week (goals kept)`}
     >
       Fix week
     </button>
