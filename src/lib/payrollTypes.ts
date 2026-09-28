@@ -80,10 +80,8 @@ export function payrollOpenToEmails(): string[] {
  * It is deliberately a single period and not a list. This exists to be undone,
  * and a list is how one forgotten entry becomes a month that never closes.
  */
-export const PAYROLL_HELD_OPEN: { year: number; month: number } | null = {
-  year: 2026,
-  month: 8,
-};
+export const PAYROLL_HELD_OPEN: { year: number; month: number } | null =
+  null;
 
 /** Whether this period is the one being held open. */
 export function isHeldOpenPeriod(period: {
