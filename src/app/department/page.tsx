@@ -37,7 +37,7 @@ export default async function DepartmentPanelPage() {
   await assertApproved(session.user);
   const userId = session.user.id;
 
-  const [led, pendingUsers] = await Promise.all([
+  const [led, pendingUsers, approvedUsers] = await Promise.all([
     prisma.departmentMembership.findMany({
     where: { userId, role: "LEAD" },
     orderBy: { department: { name: "asc" } },
@@ -122,6 +122,14 @@ export default async function DepartmentPanelPage() {
         requestedDepartment: { select: { name: true } },
       },
     }),
+    // Everyone approved — the pool a lead adds new members from. Unapproved
+    // sign-ups are deliberately excluded: letting them in is what the approve
+    // queue above is for, and a membership would put them on rosters early.
+    prisma.user.findMany({
+      where: { approvedAt: { not: null } },
+      orderBy: [{ name: "asc" }, { email: "asc" }],
+      select: { id: true, name: true, email: true },
+    }),
   ]);
 
   // Not a lead anywhere — this panel isn't theirs.
@@ -200,6 +208,13 @@ export default async function DepartmentPanelPage() {
     departments.flatMap((d) => d.people.map((p) => p.id)),
   ).size;
 
+  // The add-person picker's pool. LeadRoster filters out each department's
+  // seated people itself, so this stays one flat list for all of them.
+  const allPeople = approvedUsers.map((u) => ({
+    id: u.id,
+    name: u.name ?? u.email ?? "—",
+  }));
+
   /**
    * This lead's payroll desk, in one line: what their people have claimed for
    * the current period and how much of it is waiting on them.
@@ -272,9 +287,10 @@ export default async function DepartmentPanelPage() {
             {`${peopleCount} ${peopleCount === 1 ? "person" : "people"} in your ${
               departments.length === 1 ? "department" : "departments"
             }, you included. `}
-            Assign goals, issue fines, and award bonuses on the members under
-            you — each lands on their dashboard with a notification, and
-            everything shows in the admin ledgers too.
+            Add or remove members, assign goals, issue fines, and award
+            bonuses on the people under you — each lands on their dashboard
+            with a notification, and everything shows in the admin ledgers
+            too.
           </p>
         </div>
         <BackLink href="/dashboard" label="My dashboard" />
@@ -334,7 +350,7 @@ export default async function DepartmentPanelPage() {
         </Link>
       )}
 
-      <LeadRoster departments={departments} />
+      <LeadRoster departments={departments} allPeople={allPeople} />
     </div>
   );
 }
