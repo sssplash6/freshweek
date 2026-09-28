@@ -439,12 +439,11 @@ const TRANSITIONS: Record<PayrollStatus, readonly PayrollStatus[]> = {
   // No EXPIRED edge: nothing sweeps this desk. A request here is waiting on
   // the LEAD, not on the filer, so a clock that runs out on it would punish
   // the wrong person — and expiring it would be an override of the gate by
-  // the calendar. What keeps it from waiting forever is finance's decline
-  // (DECLINABLE in app/payroll/finance/actions.ts): they cannot pay a request
-  // the lead hasn't passed, but they can always send it back to the filer,
-  // whose resubmit window does expire. So there is exactly one exit from a
-  // stalled approval, it belongs to a person, and it is in the audit log.
-  WITH_LEAD: ["WITH_LEAD", "SUBMITTED", "DECLINED"],
+  // the calendar. What keeps it from waiting forever is finance: they can send
+  // it back to the filer (DECLINABLE in app/payroll/finance/actions.ts) or pay
+  // it past the lead (FINANCE_PAYABLE there). Both belong to a person and both
+  // are in the audit log.
+  WITH_LEAD: ["WITH_LEAD", "SUBMITTED", "DECLINED", "PROCESSED"],
   // SUBMITTED → SUBMITTED is a filer editing a request that never had a lead;
   // one that DID goes back to WITH_LEAD instead, because an edit rewrites the
   // very numbers the lead approved and their stamp can't carry over to money
@@ -806,7 +805,9 @@ export async function processSubmission(opts: {
       },
     });
     if (!sub) throw new Error("Request not found.");
-    if (sub.status !== "SUBMITTED" && sub.status !== "APPROVED_BY_ADMIN") {
+    // WITH_LEAD passes too: who may pay one is decided by the caller
+    // (FINANCE_PAYABLE in app/payroll/finance/actions.ts).
+    if (!TRANSITIONS[sub.status].includes("PROCESSED")) {
       throw new Error("Only a request awaiting payment can be processed.");
     }
 

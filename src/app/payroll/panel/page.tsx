@@ -89,13 +89,8 @@ const STATUS_ORDER: PayrollStatus[] = [
  * APPROVED_BY_ADMIN is the legacy row the removed admin stage had already
  * approved.
  *
- * WITH_LEAD is deliberately absent: it is on the lead's desk, not this one,
- * and no override pays it (see the PayrollStatus lifecycle). Such a row still
- * draws here — finance needs to see money that is coming and who is sitting on
- * it — it just draws without verbs. Declining one IS still possible, which is
- * why finance's own DECLINABLE is a wider set than this; the row gets that
- * button through the same wrapper, since a row awaiting a lead is exactly the
- * one a reviewer may need to unstick.
+ * WITH_LEAD is absent from these counts — it is still on its lead's desk —
+ * but finance can pay or decline one from its row all the same.
  */
 const AWAITING: PayrollStatus[] = ["SUBMITTED", "APPROVED_BY_ADMIN"];
 
@@ -532,16 +527,14 @@ export default async function PayrollPanelPage({
      * alone is enough, and anyone else gets the shell, which has no move to
      * offer and does not even pull the action module into the bundle.
      */
-    const payable = AWAITING.includes(s.status) && canPay;
-    // A request still on a lead's desk: unpayable by anyone, but the reviewer
-    // keeps the send-back, which is the only exit if that approval never
-    // comes (see FinanceRow's `mode`, and DECLINABLE in ../finance/actions).
-    const unstickable = s.status === "WITH_LEAD" && canPay;
-    const node = payable || unstickable ? (
+    // WITH_LEAD too: finance may pay past the lead (FINANCE_PAYABLE in
+    // ../finance/actions).
+    const payable =
+      (AWAITING.includes(s.status) || s.status === "WITH_LEAD") && canPay;
+    const node = payable ? (
       <FinanceRow
         submissionId={s.id}
         summary={summary}
-        mode={payable ? "pay" : "unstick"}
         // Revising the figures is offered only on a row this reviewer can pay
         // — the same establishment the Confirm button rests on. A ledger-bound
         // line carries its own note so the reviewer edits a line they can

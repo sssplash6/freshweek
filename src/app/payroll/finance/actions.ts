@@ -51,18 +51,17 @@ const fail = (error: string): FinanceActionResult => ({ ok: false, error });
  * the removed admin stage had already approved when it went away. Both are the
  * same job, unpaid money on the reviewer's desk, and both are payable.
  *
- * WITH_LEAD is not payable by anyone, ever: that is the whole point of the
- * gate, and there is no override — a request nobody's lead has looked at
- * cannot be paid, however senior the person asking.
+ * WITH_LEAD is payable by FINANCE only (FINANCE_PAYABLE) — finance may settle
+ * a request without waiting on its lead (asked for 2026-09-28, to close a month
+ * out whole). A lead still can't pay one they haven't approved; approving it
+ * is their move.
  *
- * It IS declinable, and that asymmetry is load-bearing. A request stuck on an
- * absent lead's desk blocks its filer from ever filing again (WITH_LEAD is in
- * IN_FLIGHT_STATUSES), so something has to be able to move it. Sending it back
- * to the filer is not paying it and not approving it — it returns the request
- * to the one person who can always act on it — so finance keeps that exit
- * while the gate itself stays absolute.
+ * It is also declinable: a request stuck on an absent lead's desk blocks its
+ * filer from ever filing again (WITH_LEAD is in IN_FLIGHT_STATUSES), and
+ * sending it back to the filer is the exit when paying it isn't right.
  */
 const PAYABLE: PayrollStatus[] = ["SUBMITTED", "APPROVED_BY_ADMIN"];
+const FINANCE_PAYABLE: PayrollStatus[] = [...PAYABLE, "WITH_LEAD"];
 const DECLINABLE: PayrollStatus[] = [
   "WITH_LEAD",
   "SUBMITTED",
@@ -239,16 +238,14 @@ async function payOne(
   }
   const actorId = payer.actorId;
   const who = sub.user.name ?? sub.user.email ?? "Someone";
-  if (!PAYABLE.includes(sub.status)) {
+  if (!(payer.all ? FINANCE_PAYABLE : PAYABLE).includes(sub.status)) {
     return {
       ok: false,
       name: who,
-      // Name the gate rather than saying "reload": a WITH_LEAD row is not a
-      // stale screen, it is a request whose lead hasn't passed it yet, and
-      // "reload" would send the reviewer looking for a problem on their end.
+      // Only a lead can land here on a WITH_LEAD row — finance may pay it.
       error:
         sub.status === "WITH_LEAD"
-          ? "Their department lead hasn't approved this yet — it can't be paid until they do. Send it back if it's stuck."
+          ? "You haven't approved this yet — approve it, then settle it."
           : "Only a request awaiting payment can be confirmed — reload.",
     };
   }
@@ -510,14 +507,10 @@ export async function editSubmissionAsFinance(
     },
   });
   if (!sub) return fail("Request not found.");
-  // Only money still on this desk. A paid request is a record of a payment
-  // that happened, and one waiting on its lead isn't finance's to rewrite.
-  if (!PAYABLE.includes(sub.status)) {
-    return fail(
-      sub.status === "WITH_LEAD"
-        ? "That request is still with its department lead — send it back if it needs changing."
-        : "Only a request awaiting payment can be edited — reload.",
-    );
+  // Only money still unpaid. A paid request is a record of a payment that
+  // happened.
+  if (!FINANCE_PAYABLE.includes(sub.status)) {
+    return fail("Only a request awaiting payment can be edited — reload.");
   }
 
   // ----- Validate every line before writing anything -----
