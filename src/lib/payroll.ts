@@ -35,7 +35,7 @@ import {
 } from "@/lib/payrollTypes";
 import { approvableFilerIds } from "@/lib/payrollApproval";
 import { notify } from "@/lib/notifications";
-import { sendEmail } from "@/lib/email";
+import { sendEmail, sendEmails } from "@/lib/email";
 import type { PayrollStatus, Prisma } from "@/generated/prisma/client";
 
 type Db = Prisma.TransactionClient | typeof prisma;
@@ -975,24 +975,22 @@ export async function reconcilePayrollReminders(now = new Date()): Promise<void>
       "PAYROLL",
       message,
     );
-    const sent = await Promise.all(
+    const sent = await sendEmails(
       unfiled
         .filter((e) => e.email)
-        .map((e) =>
-          sendEmail({
-            to: e.email!,
-            subject: `Payroll: ${label} filing is open`,
-            text:
-              `Hi${e.name ? ` ${e.name}` : ""},\n\n` +
-              `Filing for ${label} opened this morning. Your bonuses and fines ` +
-              `are pulled in automatically — you add your salary and any ` +
-              `expenses.\n\n` +
-              `The window closes ${formatTashkent(period.filingClosesAt)}.\n\n` +
-              `File it here: ${appUrl()}/payroll\n\n— FreshWeek`,
-          }),
-        ),
+        .map((e) => ({
+          to: e.email!,
+          subject: `Payroll: ${label} filing is open`,
+          text:
+            `Hi${e.name ? ` ${e.name}` : ""},\n\n` +
+            `Filing for ${label} opened this morning. Your bonuses and fines ` +
+            `are pulled in automatically — you add your salary and any ` +
+            `expenses.\n\n` +
+            `The window closes ${formatTashkent(period.filingClosesAt)}.\n\n` +
+            `File it here: ${appUrl()}/payroll\n\n— FreshWeek`,
+        })),
     );
-    if (sent.some((ok) => !ok)) {
+    if (!sent) {
       throw new Error("at least one payroll reminder email did not go out");
     }
   } catch (e) {
