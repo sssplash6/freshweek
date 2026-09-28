@@ -35,7 +35,7 @@ import {
 } from "@/lib/payrollTypes";
 import { approvableFilerIds } from "@/lib/payrollApproval";
 import { notify } from "@/lib/notifications";
-import { sendEmail, sendEmails } from "@/lib/email";
+import { sendEmails } from "@/lib/email";
 import type { PayrollStatus, Prisma } from "@/generated/prisma/client";
 
 type Db = Prisma.TransactionClient | typeof prisma;
