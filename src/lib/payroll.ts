@@ -92,6 +92,7 @@ type Db = Prisma.TransactionClient | typeof prisma;
 const BUILT_IN_FINANCE = [
   "valera@freshman.academy",
   "valentina@freshman.academy",
+  "tech@freshman.academy",
 ];
 
 /**
