@@ -20,6 +20,7 @@ import {
 import { marketingAccess, marketingMembers } from "@/lib/marketingAccess";
 import { prisma } from "@/lib/prisma";
 import { reconcileShootReminders } from "@/lib/shootReminders";
+import { CalendarPanel } from "./_components/CalendarPanel";
 import { ShootsPanel, type ShootRow } from "./_components/ShootsPanel";
 import { PostsPanel, type PostRow, type ShootOption } from "./_components/PostsPanel";
 import { TasksPanel, type TaskRow } from "./_components/TasksPanel";
@@ -319,6 +320,15 @@ export default async function MarketingPage() {
           </a>
         ))}
       </nav>
+
+      <div className="mb-10">
+        <CalendarPanel
+          shoots={shootRows}
+          posts={postRows}
+          tasks={taskRows}
+          todayYmd={todayYmd}
+        />
+      </div>
 
       <div className="grid items-start gap-10 lg:grid-cols-2 lg:gap-8">
         <ShootsPanel
