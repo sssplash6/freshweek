@@ -118,7 +118,7 @@ export async function approveAsLead(
     // The filer hears it from their own lead, not just from a status change.
     await notify(
       tx,
-      sub.user.id,
+      sub.user.id === actorId ? [] : sub.user.id,
       "PAYROLL",
       `${meName} approved your ${label} pay request — it's with finance now.`,
     );

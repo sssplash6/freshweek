@@ -13,7 +13,7 @@ import { weekPercent } from "@/lib/progress";
 import { formatDateTimeTz } from "@/lib/dates";
 import { formatMoney } from "@/lib/penalties";
 import { ensureCurrentPeriod } from "@/lib/payroll";
-import { approvableFilerIds } from "@/lib/payrollApproval";
+import { approvalScopeFor } from "@/lib/payrollApproval";
 import { isPayrollOpenFor, payrollPeriodLabel } from "@/lib/payrollTypes";
 import { BackLink } from "@/app/_components/BackLink";
 import { LeadRoster, type LeadDepartment } from "./_components/LeadRoster";
@@ -232,7 +232,7 @@ export default async function DepartmentPanelPage() {
    * would be a number nobody can act on, under a link to a coming-soon screen.
    */
   const payrollScope = isPayrollOpenFor(session.user.email)
-    ? await approvableFilerIds(prisma, userId)
+    ? await approvalScopeFor(prisma, userId)
     : new Set<string>();
   let teamPayroll: {
     label: string;
@@ -253,13 +253,15 @@ export default async function DepartmentPanelPage() {
         // countable set /payroll/team and the finance panel total.
         status: { notIn: ["DRAFT", "EXPIRED"] },
       },
-      select: { status: true, netTotal: true },
+      select: { userId: true, status: true, netTotal: true },
     });
     // The same two statuses /payroll/team and the finance panel treat as
     // awaiting payment; a legacy APPROVED_BY_ADMIN row is payable like any
     // other (PAYABLE in app/payroll/finance/actions.ts).
     const payable = rows.filter(
-      (r) => r.status === "SUBMITTED" || r.status === "APPROVED_BY_ADMIN",
+      (r) =>
+        (r.status === "SUBMITTED" || r.status === "APPROVED_BY_ADMIN") &&
+        r.userId !== userId, // a lead can't pay their own
     );
     teamPayroll = {
       label: payrollPeriodLabel(period.year, period.month),

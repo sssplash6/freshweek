@@ -13,7 +13,7 @@ import {
   expireLapsedSubmissions,
   formatTashkent,
 } from "@/lib/payroll";
-import { approvableFilerIds } from "@/lib/payrollApproval";
+import { approvalScopeFor } from "@/lib/payrollApproval";
 import {
   formatCents,
   parsePaymentDetails,
@@ -96,7 +96,7 @@ export default async function TeamPayrollPage({
 
   // Who this viewer may approve. Empty means they lead nothing (or only a mini
   // department, which runs itself) — there is no desk to show them.
-  const scope = await approvableFilerIds(prisma, viewerId);
+  const scope = await approvalScopeFor(prisma, viewerId);
   if (scope.size === 0) redirect("/dashboard");
 
   const now = new Date();
@@ -197,7 +197,9 @@ export default async function TeamPayrollPage({
   const waiting = submissions.filter((s) => s.status === "WITH_LEAD");
   // Approved and unpaid: what this lead can settle now, and what the tick
   // column and the batch bar are handed. Same order as the list.
-  const toSettle = submissions.filter((s) => PAYABLE.includes(s.status));
+  const toSettle = submissions.filter(
+    (s) => PAYABLE.includes(s.status) && s.user.id !== viewerId, // nobody pays their own
+  );
   const settleTotal = toSettle.reduce((sum, s) => sum + s.netTotal, 0);
   const selectable: PayableRow[] = toSettle.map((s) => ({
     id: s.id,
@@ -308,7 +310,8 @@ export default async function TeamPayrollPage({
           )}
           <ul className="flex flex-col gap-2">
             {submissions.map((s) => {
-              const canSettle = PAYABLE.includes(s.status);
+              const canSettle =
+                PAYABLE.includes(s.status) && s.user.id !== viewerId;
               const av = resolveAvatar(s.user.avatar, s.user.email ?? s.user.id);
               const metaLine =
                 s.status === "DECLINED" && s.resubmitDeadline
