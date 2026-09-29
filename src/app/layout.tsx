@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import { auth } from "@/auth";
 import { isDailyReporter, isDailyReportRecipient } from "@/lib/dailyReports";
+import { isMarketingUser } from "@/lib/marketingAccess";
 import { SiteNav } from "./_components/SiteNav";
 import { Toaster } from "./_components/Toaster";
 import "./globals.css";
@@ -34,12 +35,16 @@ export default async function RootLayout({
 }: Readonly<{
   children: React.ReactNode;
 }>) {
-  // Whether to show the "Daily reports" nav entry: reporters write there,
-  // the recipient reads there, nobody else has business on the page.
+  // Which opt-in nav entries this person gets: "Daily reports" for the people
+  // in that loop (reporters write there, the recipient reads), "Content plan"
+  // for the marketing department — nobody else has business on either page.
   const session = await auth().catch(() => null);
   const email = session?.user?.email;
   const showDailyReports =
     isDailyReporter(email) || isDailyReportRecipient(email);
+  const showMarketing = session?.user?.id
+    ? await isMarketingUser(session.user).catch(() => false)
+    : false;
 
   return (
     <html
@@ -52,7 +57,7 @@ export default async function RootLayout({
         <script dangerouslySetInnerHTML={{ __html: themeScript }} />
       </head>
       <body className="min-h-full flex flex-col">
-        <SiteNav showDailyReports={showDailyReports} />
+        <SiteNav showDailyReports={showDailyReports} showMarketing={showMarketing} />
         {children}
         <Toaster />
       </body>

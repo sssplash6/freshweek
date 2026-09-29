@@ -61,6 +61,8 @@ import {
   tashkentTodayYmd,
 } from "@/lib/dailyReportTypes";
 import { resolveAvatar } from "@/lib/avatar";
+import { MARKETING_DEPARTMENT } from "@/lib/marketing";
+import { reconcileShootReminders } from "@/lib/shootReminders";
 import { celebratesOn } from "@/lib/birthdays";
 import { GoalCard } from "./_components/GoalCard";
 import { AddGoalCard } from "./_components/AddGoalCard";
@@ -82,6 +84,7 @@ import { BonusNotice } from "./_components/BonusNotice";
 import { AssignedTasks } from "./_components/AssignedTasks";
 import { AssignGoalButton } from "./_components/AssignGoalButton";
 import { DailyReportPrompt } from "./_components/DailyReportPrompt";
+import { MarketingPrompt } from "./_components/MarketingPrompt";
 import { BirthdayPrompt } from "./_components/BirthdayPrompt";
 import { BirthdayBoard } from "./_components/BirthdayBoard";
 import {
@@ -133,12 +136,13 @@ export default async function DashboardPage({
       telegramUsername: true,
       // departmentId + mini: the header's join-request button counts only
       // sign-ups at a door this viewer can actually open, and a mini
-      // department's lead seat opens none (lib/signupAlerts.ts).
+      // department's lead seat opens none (lib/signupAlerts.ts). `name` tells
+      // a Marketing seat — the shoot-reminder sweep runs for those members.
       memberships: {
         select: {
           role: true,
           departmentId: true,
-          department: { select: { mini: true } },
+          department: { select: { mini: true, name: true } },
         },
       },
       birthday: true,
@@ -207,6 +211,51 @@ export default async function DashboardPage({
   // once its slot has passed (claimed once per day).
   await reconcileDailyReportFines({ userId }).catch(() => {});
   await reconcileDailyReportReminders().catch(() => {});
+
+  // Same lazy no-cron treatment for the marketing content plan: for a
+  // department member (or an admin), fire the coming-up nudge for every
+  // assigned shoot that entered its 24h window — claimed per shoot, so this
+  // is a cheap read on every load after that.
+  const viewerInMarketing = profile.memberships.some(
+    (m) => m.department.name.toLowerCase() === MARKETING_DEPARTMENT.toLowerCase(),
+  );
+  const viewerIsMarketing = viewerIsAdmin || viewerInMarketing;
+  if (viewerIsMarketing) {
+    await reconcileShootReminders().catch(() => {});
+  }
+  // The content-plan row: what on /marketing is waiting on this member.
+  // Department members only — an admin outside it gets the profile-menu link.
+  const marketingPrompt = viewerInMarketing
+    ? await (async () => {
+        const at = new Date();
+        const todayUtc = fromYmd(tashkentTodayYmd(at));
+        const [awaitingReports, openTasks, overdueTasks, nextShoot] =
+          await Promise.all([
+            prisma.contentShoot.count({
+              where: { assigneeId: userId, reportedAt: null, shootAt: { lte: at } },
+            }),
+            prisma.marketingTask.count({
+              where: { assigneeId: userId, completedAt: null },
+            }),
+            prisma.marketingTask.count({
+              where: { assigneeId: userId, completedAt: null, dueOn: { lt: todayUtc } },
+            }),
+            prisma.contentShoot.findFirst({
+              where: { assigneeId: userId, reportedAt: null, shootAt: { gt: at } },
+              orderBy: { shootAt: "asc" },
+              select: { title: true, shootAt: true },
+            }),
+          ]);
+        return {
+          awaitingReports,
+          openTasks,
+          overdueTasks,
+          nextShootLabel: nextShoot
+            ? `“${nextShoot.title}” — ${formatDateTimeTz(nextShoot.shootAt)}`
+            : null,
+        };
+      })().catch(() => null)
+    : null;
 
   // Backfill a unique avatar for users created before avatars existed.
   const avatar =
@@ -780,6 +829,7 @@ export default async function DashboardPage({
               avatar={avatar}
               isAdmin={isAdmin(session!.user.email)}
               isLead={viewerIsLead}
+              isMarketing={viewerIsMarketing}
             />
           </div>
         </div>
@@ -813,6 +863,12 @@ export default async function DashboardPage({
             optionalDay={!isRequiredDay(reportDay)}
             yesterdayOpen={yesterdayReportOpen}
           />
+        </div>
+      )}
+
+      {marketingPrompt && (
+        <div className="mb-5">
+          <MarketingPrompt {...marketingPrompt} />
         </div>
       )}
 

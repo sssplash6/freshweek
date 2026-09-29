@@ -139,6 +139,13 @@ model User {
   tasksAssigned   AssignedTask[] @relation("AssignedIssued")
   attendances     Attendance[]
   notifications   Notification[]
+
+  shootsAssigned      ContentShoot[] @relation("ShootAssigned")
+  shootsCreated       ContentShoot[] @relation("ShootsCreated")
+  shootReportsFiled   ContentShoot[] @relation("ShootReportsFiled")
+  postsCreated        ContentPost[]
+  marketingTasksOwned MarketingTask[] @relation("MarketingTasksOwned")
+  marketingTasksSet   MarketingTask[] @relation("MarketingTasksSet")
   payrollSubmissions PayrollSubmission[]
   payrollEvents      PayrollEvent[] @relation("PayrollEventsActed")
 
@@ -342,6 +349,7 @@ enum NotificationType {
   TASK_ASSIGNED
   REPORT
   PAYROLL
+  MARKETING
   OTHER
 }
 
@@ -627,9 +635,107 @@ model GoalShare {
   @@index([originalGoalId])
 }
 
-// Product feedback addressed to tech@freshman.academy. Stored here rather than
-// emailed (no mail provider configured); read straight from the table. The
-// submitter's email is captured at write time so it survives user deletion.
+// ----- Marketing content plan -----
+
+// One planned piece of video content: what it is, when it shoots, where, and
+// who the assigned creator is. Shoot state is DERIVED, never stored —
+// `reportedAt` null and `shootAt` in the future is upcoming, in the past is
+// "awaiting report", and `reportedAt` set is reported. `shootAt` is a real
+// instant (the Meeting.scheduledAt convention) displayed in Tashkent.
+//
+// The videographer's report is two Google Drive links — the finished cut and
+// the raw materials. Links only: nothing is uploaded here, and either link
+// may be left for later, which is why both are nullable rather than a pair.
+//
+// `reminderSentAt` is the shoot-reminder sweep's claim (the lazy no-cron
+// pattern of PayrollPeriod.reminderSentAt): whichever page load reaches an
+// assigned shoot inside its reminder window first writes it, so racing loads
+// can't send the nudge twice.
+//
+// The plan belongs to the department, not the person: every actor link is
+// SetNull so a seat leaving marketing doesn't erase the calendar they built.
+model ContentShoot {
+  id        String   @id @default(cuid())
+  title     String
+  shootAt   DateTime
+  location  String
+  assigneeId String?
+  note      String?
+
+  reminderSentAt DateTime?
+  finishedUrl    String?
+  rawUrl         String?
+  reportedAt     DateTime?
+  reportedById   String?
+
+  createdById String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  assignee   User? @relation("ShootAssigned", fields: [assigneeId], references: [id], onDelete: SetNull)
+  reportedBy User? @relation("ShootReportsFiled", fields: [reportedById], references: [id], onDelete: SetNull)
+  createdBy  User? @relation("ShootsCreated", fields: [createdById], references: [id], onDelete: SetNull)
+  posts      ContentPost[]
+
+  @@index([shootAt])
+  @@index([assigneeId])
+}
+
+// One scheduled publication on the posting calendar. `shootId` is optional —
+// plenty of posts (a graphic, a repost, an announcement) were never a shoot —
+// and SetNull so calling the shoot off doesn't take the post down with it.
+// `publishAt` is a real instant rendered in Tashkent, like `shootAt`.
+//
+// `platforms` is the channels it goes out on — one row per piece of content,
+// not per channel, because cross-posting the same cut is the norm. Values are
+// the POST_PLATFORMS keys in lib/marketing.ts (validated there, not an enum,
+// so adding a channel is a code change rather than a migration). `caption` is
+// the copy/brief for whoever publishes; `postUrl` is the live link, filled in
+// once it's out.
+model ContentPost {
+  id          String   @id @default(cuid())
+  title       String
+  publishAt   DateTime
+  platforms   String[] @default([])
+  caption     String?
+  postUrl     String?
+  shootId     String?
+  publishedAt DateTime?
+  createdById String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  shoot     ContentShoot? @relation(fields: [shootId], references: [id], onDelete: SetNull)
+  createdBy User?         @relation(fields: [createdById], references: [id], onDelete: SetNull)
+
+  @@index([publishAt])
+}
+
+// Work one marketing teammate hands another — the same idea as AssignedTask
+// but peer-to-peer inside the department rather than top-down from an admin,
+// and tracked with an honest percent like a goal's manualPercent. Lives on
+// /marketing, out of the weekly goal flow, so it never counts toward a week's
+// completion percent. `dueOn` is a date-only (UTC midnight, the goal-deadline
+// convention); `completedAt` is the deliberate done-mark, reopened by nulling.
+model MarketingTask {
+  id          String   @id @default(cuid())
+  title       String
+  note        String?
+  dueOn       DateTime?
+  assigneeId  String
+  percent     Int      @default(0)
+  completedAt DateTime?
+  createdById String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  assignee  User  @relation("MarketingTasksOwned", fields: [assigneeId], references: [id], onDelete: Cascade)
+  createdBy User? @relation("MarketingTasksSet", fields: [createdById], references: [id], onDelete: SetNull)
+
+  @@index([assigneeId])
+  @@index([dueOn])
+}
+
 // A member reporting another member — the "Report a colleague" form on
 // /penalties. It began life as a notification to the admins and nothing else,
 // which meant a report was unfindable 48 hours later and nobody could say what
@@ -691,6 +797,9 @@ model ColleagueReportSubject {
   @@index([userId])
 }
 
+// Product feedback addressed to tech@freshman.academy. Stored here rather than
+// emailed (no mail provider configured); read straight from the table. The
+// submitter's email is captured at write time so it survives user deletion.
 model Feedback {
   id        String   @id @default(cuid())
   message   String

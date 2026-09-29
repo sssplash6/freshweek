@@ -15,6 +15,8 @@ type Props = {
   isAdmin?: boolean;
   /** Leads at least one department — unlocks the department panel entry. */
   isLead?: boolean;
+  /** In the Marketing department (or an admin) — unlocks the content plan. */
+  isMarketing?: boolean;
 };
 
 // Changing your animal lives on /profile (see ProfileAnimal) — the roster is
@@ -25,6 +27,7 @@ export function ProfileMenu({
   avatar: assigned,
   isAdmin,
   isLead,
+  isMarketing,
 }: Props) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
@@ -113,6 +116,15 @@ export function ProfileMenu({
 
           <div className="my-1 border-t border-line" />
 
+          {isMarketing && (
+            <Link
+              href="/marketing"
+              onClick={() => setOpen(false)}
+              className="block rounded-lg px-3 py-2 text-left text-sm font-medium text-brand transition hover:bg-canvas"
+            >
+              Content plan
+            </Link>
+          )}
           {isLead && (
             <Link
               href="/department"
