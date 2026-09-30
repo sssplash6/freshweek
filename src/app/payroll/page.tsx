@@ -198,10 +198,12 @@ export default async function PayrollPage() {
 
   const canFileFresh = !current && filingOpen;
   const canResubmit = current?.status === "DECLINED"; // lapsed ones were swept above
-  // Still in the queue, untouched by a reviewer, and the window is still open.
-  // The review is the other bound: an admin acting on it closes editing early,
-  // whatever the clock says.
-  const canEdit = current?.status === "SUBMITTED" && filingOpen;
+  // Still in the queue (with the lead or finance), untouched by a reviewer, and
+  // the window is still open. The review is the other bound: an admin acting on
+  // it closes editing early, whatever the clock says.
+  const canEdit =
+    (current?.status === "SUBMITTED" || current?.status === "WITH_LEAD") &&
+    filingOpen;
   const blocking = canFileFresh ? await inFlightSubmission(prisma, me.id) : null;
 
   const dateOf = (d: Date) => formatYmd(toYmd(d), period.year);
