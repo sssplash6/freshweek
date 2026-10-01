@@ -70,7 +70,7 @@ type ShootValues = {
 };
 
 /** The shoot's editable fields — shared by the composer and the row editor. */
-function ShootForm({
+export function ShootForm({
   members,
   initial,
   defaultDate,

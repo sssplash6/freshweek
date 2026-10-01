@@ -9,16 +9,20 @@ import {
   POST_STATE,
   SHOOT_STATE,
 } from "@/lib/marketing";
-import { ChevronIcon } from "../../dashboard/_components/icons";
-import type { PostRow } from "./PostsPanel";
-import type { ShootRow } from "./ShootsPanel";
-import type { TaskRow } from "./TasksPanel";
+import { ChevronIcon, PlusIcon } from "../../dashboard/_components/icons";
+import { delegateTask, planShoot, schedulePost } from "../actions";
+import { PostForm, type PostRow, type ShootOption } from "./PostsPanel";
+import { ShootForm, type ShootRow } from "./ShootsPanel";
+import { TaskForm, type TaskRow } from "./TasksPanel";
 import {
+  addBtn,
   iconBtn,
+  type Member,
   MemberChip,
   PanelHeader,
   secondaryBtn,
   StatePill,
+  useAction,
 } from "./ui";
 
 // The whole department's month on one grid — shoots, posts and task deadlines
@@ -27,8 +31,11 @@ import {
 // identify the KIND of work — the guide document hues, which carry no state
 // meaning per the palette semantics in globals.css — and only flip to a state
 // color (warn/bad) when the row needs attention, matching the StatePill rules
-// the lists below use. The calendar is read-only: edits stay in the panels
-// where the forms live.
+// the lists below use. The selected day sits on top of the grid like a
+// calendar app's day card: click a date and the block shows what's on it plus
+// the three things you can add there — a shoot, a post or a task — each form
+// opening right in the card with that date pre-filled. Editing existing rows
+// stays in the panels below.
 
 type CalItem =
   | { kind: "shoot"; row: ShootRow }
@@ -125,6 +132,13 @@ const KIND_LABEL: Record<CalItem["kind"], string> = {
   task: "Task due",
 };
 
+/** The day card's "add" row — the same three verbs the panels' buttons use. */
+const ADD_LABEL: Record<CalItem["kind"], string> = {
+  shoot: "Plan a shoot",
+  post: "Schedule a post",
+  task: "Hand over a task",
+};
+
 /** One-line chip text — time first so a busy day still scans by the clock. */
 function chipText(item: CalItem): string {
   if (item.kind === "task") {
@@ -134,13 +148,37 @@ function chipText(item: CalItem): string {
   return `${item.row.timeHm} ${who}${item.row.title}`;
 }
 
-function DayAgenda({ items, ymd, todayYmd }: { items: CalItem[]; ymd: string; todayYmd: string }) {
+/**
+ * The clicked day's card, pinned above the grid: its items, then the three
+ * things that can land on it. Picking an action unfolds that form in place —
+ * Google Calendar's click-a-day popover, flattened into the card.
+ */
+function DayAgenda({
+  items,
+  ymd,
+  todayYmd,
+  members,
+  shootOptions,
+}: {
+  items: CalItem[];
+  ymd: string;
+  todayYmd: string;
+  members: Member[];
+  shootOptions: ShootOption[];
+}) {
+  const [composing, setComposing] = useState<CalItem["kind"] | null>(null);
+  const { pending, error, setError, run } = useAction();
+  const open = (kind: CalItem["kind"]) => {
+    setError(null);
+    setComposing(kind);
+  };
+  const close = () => setComposing(null);
+  const dateLabel = dayLabel(ymd, Number(todayYmd.slice(0, 4)));
+
   return (
-    <div className="mt-3 overflow-hidden rounded-xl border border-line bg-surface">
+    <div className="mb-3 overflow-hidden rounded-xl border border-line bg-surface">
       <h3 className="flex items-baseline gap-2 border-b border-line px-4 py-2.5">
-        <span className="text-sm font-semibold text-ink">
-          {dayLabel(ymd, Number(todayYmd.slice(0, 4)))}
-        </span>
+        <span className="text-sm font-semibold text-ink">{dateLabel}</span>
         {ymd === todayYmd && (
           <span className="text-[11px] font-semibold uppercase tracking-wide text-brand">
             Today
@@ -162,6 +200,60 @@ function DayAgenda({ items, ymd, todayYmd }: { items: CalItem[]; ymd: string; to
             <AgendaItem key={`${item.kind}-${item.row.id}`} item={item} />
           ))}
         </ul>
+      )}
+      {composing === null ? (
+        <div className="flex flex-wrap items-center gap-1.5 border-t border-line bg-canvas/50 px-3 py-2">
+          {(Object.keys(ADD_LABEL) as CalItem["kind"][]).map((kind) => (
+            <button
+              key={kind}
+              type="button"
+              onClick={() => open(kind)}
+              className={addBtn}
+            >
+              <PlusIcon className="h-3.5 w-3.5" />
+              {ADD_LABEL[kind]}
+            </button>
+          ))}
+        </div>
+      ) : (
+        <div className="border-t border-line bg-canvas/50 px-4 py-3">
+          <p className="mb-2.5 text-[11px] font-semibold uppercase tracking-wide text-muted-fg">
+            {ADD_LABEL[composing]} · {dateLabel}
+          </p>
+          {composing === "shoot" && (
+            <ShootForm
+              members={members}
+              defaultDate={ymd}
+              submitLabel="Add to calendar"
+              pending={pending}
+              error={error}
+              onCancel={close}
+              onSubmit={(v) => run(() => planShoot(v), close)}
+            />
+          )}
+          {composing === "post" && (
+            <PostForm
+              shootOptions={shootOptions}
+              defaultDate={ymd}
+              submitLabel="Add to calendar"
+              pending={pending}
+              error={error}
+              onCancel={close}
+              onSubmit={(v) => run(() => schedulePost(v), close)}
+            />
+          )}
+          {composing === "task" && (
+            <TaskForm
+              members={members}
+              defaultDue={ymd}
+              submitLabel="Hand it over"
+              pending={pending}
+              error={error}
+              onCancel={close}
+              onSubmit={(v) => run(() => delegateTask(v), close)}
+            />
+          )}
+        </div>
       )}
     </div>
   );
@@ -262,11 +354,15 @@ export function CalendarPanel({
   posts,
   tasks,
   todayYmd,
+  members,
+  shootOptions,
 }: {
   shoots: ShootRow[];
   posts: PostRow[];
   tasks: TaskRow[];
   todayYmd: string;
+  members: Member[];
+  shootOptions: ShootOption[];
 }) {
   const [month, setMonth] = useState(todayYmd.slice(0, 7));
   const [selected, setSelected] = useState(todayYmd);
@@ -307,6 +403,15 @@ export function CalendarPanel({
           ))}
         </div>
       </PanelHeader>
+
+      <DayAgenda
+        key={selected}
+        items={selectedItems}
+        ymd={selected}
+        todayYmd={todayYmd}
+        members={members}
+        shootOptions={shootOptions}
+      />
 
       <div className="mb-2 flex items-center gap-1 px-1">
         <button
@@ -413,8 +518,6 @@ export function CalendarPanel({
           })}
         </div>
       </div>
-
-      <DayAgenda items={selectedItems} ymd={selected} todayYmd={todayYmd} />
     </section>
   );
 }

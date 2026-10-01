@@ -327,6 +327,8 @@ export default async function MarketingPage() {
           posts={postRows}
           tasks={taskRows}
           todayYmd={todayYmd}
+          members={memberViews}
+          shootOptions={shootOptions}
         />
       </div>
 

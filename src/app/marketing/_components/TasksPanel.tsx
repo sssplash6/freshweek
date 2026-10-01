@@ -61,9 +61,10 @@ type TaskValues = {
   assigneeId: string;
 };
 
-function TaskForm({
+export function TaskForm({
   members,
   initial,
+  defaultDue,
   submitLabel,
   pending,
   error,
@@ -72,6 +73,8 @@ function TaskForm({
 }: {
   members: Member[];
   initial?: TaskRow;
+  /** Pre-filled due date for a fresh task — the day picked on the calendar. */
+  defaultDue?: string;
   submitLabel: string;
   pending: boolean;
   error: string | null;
@@ -80,7 +83,7 @@ function TaskForm({
 }) {
   const [title, setTitle] = useState(initial?.title ?? "");
   const [assigneeId, setAssigneeId] = useState(initial?.assignee.id ?? "");
-  const [dueOn, setDueOn] = useState(initial?.dueYmd ?? "");
+  const [dueOn, setDueOn] = useState(initial?.dueYmd ?? defaultDue ?? "");
   const [note, setNote] = useState(initial?.note ?? "");
   const ready = title.trim() !== "" && assigneeId !== "";
   const options = assigneeOptions(members, initial?.assignee ?? null);

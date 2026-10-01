@@ -73,7 +73,7 @@ type PostValues = {
   shootId: string | null;
 };
 
-function PostForm({
+export function PostForm({
   shootOptions,
   initial,
   defaultDate,
