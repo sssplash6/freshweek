@@ -461,7 +461,10 @@ const TRANSITIONS: Record<PayrollStatus, readonly PayrollStatus[]> = {
   // desk, so it is editable exactly like a SUBMITTED one.
   APPROVED_BY_ADMIN: ["APPROVED_BY_ADMIN", "DECLINED", "PROCESSED"],
   EXPIRED: [],
-  PROCESSED: [],
+  // Back out only through unprocessSubmission, to wherever the payment was
+  // made from — "I confirmed the wrong one" is a mistake to be undone, not a
+  // new state of the request.
+  PROCESSED: ["WITH_LEAD", "SUBMITTED", "APPROVED_BY_ADMIN"],
 };
 
 /**
@@ -899,6 +902,72 @@ export async function processSubmission(opts: {
       data: { processedAt: now, fineBatchId: batchId },
     });
     return { ok: true, batchId };
+  });
+}
+
+/**
+ * Take a payment back: the exact inverse of processSubmission. The PAYROLL
+ * fine batch is deleted and each fine gets its balance back (reopening if the
+ * payment had closed it), the bonuses are released to be claimed again, and
+ * the request returns to the status it was paid from, so it is payable again.
+ * The fines ledger refuses to undo a PAYROLL receipt itself (undoSettlement in
+ * app/admin/actions.ts) precisely because the submission has to move with it —
+ * this is that move.
+ */
+export async function unprocessSubmission(opts: {
+  submissionId: string;
+  actorId: string;
+}): Promise<void> {
+  await prisma.$transaction(async (tx) => {
+    const sub = await tx.payrollSubmission.findUnique({
+      where: { id: opts.submissionId },
+      select: { id: true, status: true, fineBatchId: true },
+    });
+    if (!sub || sub.status !== "PROCESSED") {
+      throw new Error("Only a paid request can be undone — reload.");
+    }
+    const paidEvent = await tx.payrollEvent.findFirst({
+      where: { submissionId: sub.id, toStatus: "PROCESSED" },
+      orderBy: { createdAt: "desc" },
+      select: { fromStatus: true },
+    });
+    const backTo = paidEvent?.fromStatus ?? "SUBMITTED";
+
+    if (sub.fineBatchId) {
+      const payments = await tx.finePayment.findMany({
+        where: { batchId: sub.fineBatchId, source: "PAYROLL" },
+        select: {
+          amount: true,
+          penalty: { select: { id: true, amount: true, paidAmount: true } },
+        },
+      });
+      for (const p of payments) {
+        const paidAmount = Math.max(0, p.penalty.paidAmount - p.amount);
+        await tx.penalty.update({
+          where: { id: p.penalty.id },
+          data: {
+            paidAmount,
+            ...(paidAmount < p.penalty.amount
+              ? { paidAt: null, settledById: null }
+              : {}),
+          },
+        });
+      }
+      await tx.finePayment.deleteMany({ where: { batchId: sub.fineBatchId } });
+    }
+    await tx.bonus.updateMany({
+      where: { payrollSubmissionId: sub.id },
+      data: { payrollSubmissionId: null },
+    });
+
+    await applyTransition(tx, {
+      submissionId: sub.id,
+      from: "PROCESSED",
+      to: backTo,
+      actorId: opts.actorId,
+      note: "Payment undone.",
+      data: { processedAt: null, fineBatchId: null },
+    });
   });
 }
 

@@ -18,6 +18,7 @@ import {
   requirePayer,
   resubmitWindowFor,
   reviewerUsers,
+  unprocessSubmission,
   type Payer,
 } from "@/lib/payroll";
 import { regenerateInvoicePdf } from "@/lib/payrollInvoice";
@@ -330,6 +331,50 @@ export async function confirmPayment(
   const outcome = await payOne(submissionId, payer);
   if (!outcome.ok) return fail(outcome.error);
 
+  revalidatePanels();
+  return { ok: true };
+}
+
+/**
+ * Undo a payment confirmed by mistake — same desks and same scope as paying
+ * it (`requirePayer` / `mayPay`), so a lead can take back one of their own
+ * people's payments. The request goes back to waiting for payment, and the fine
+ * deductions and bonus stamps it wrote are reversed (unprocessSubmission).
+ */
+export async function undoPayment(
+  submissionId: string,
+): Promise<FinanceActionResult> {
+  const session = await auth();
+  if (!isPayrollOpenFor(session?.user?.email)) {
+    return fail("Payroll is closed right now.");
+  }
+  const payer = await requirePayer(session);
+
+  const sub = await loadForReview(submissionId);
+  if (!sub || !mayPay(payer, sub.user.id)) return fail("Request not found.");
+  if (sub.status !== "PROCESSED") {
+    return fail("Only a paid request can be undone — reload.");
+  }
+  try {
+    await unprocessSubmission({ submissionId, actorId: payer.actorId });
+  } catch (e) {
+    if (e instanceof Error) return fail(e.message);
+    throw e;
+  }
+
+  const label = payrollPeriodLabel(sub.period.year, sub.period.month);
+  const who = sub.user.name ?? sub.user.email ?? "Someone";
+  await notify(
+    prisma,
+    sub.user.id,
+    "PAYROLL",
+    `Your ${label} pay request was marked paid by mistake — it's back to waiting for payment, and its fine deductions were reversed.`,
+  );
+  await tellOtherReviewers(
+    prisma,
+    `${who}'s ${label} payment was undone — it's waiting for payment again.`,
+    [payer.actorId, sub.user.id],
+  );
   revalidatePanels();
   return { ok: true };
 }

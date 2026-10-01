@@ -42,7 +42,7 @@ import {
 } from "../_components/PaySelection";
 import { SubmissionDetail } from "../_components/SubmissionDetail";
 import { LeadRow } from "./LeadRow";
-import { SettleRow } from "./SettleRow";
+import { PaidRow, SettleRow } from "./SettleRow";
 
 /**
  * What this desk may PAY — the panel's AWAITING and finance's PAYABLE, one
@@ -385,6 +385,13 @@ export default async function TeamPayrollPage({
                   <SettleRow key={s.id} submissionId={s.id} summary={summary}>
                     {detail}
                   </SettleRow>
+                );
+              }
+              if (s.status === "PROCESSED" && s.user.id !== viewerId) {
+                return (
+                  <PaidRow key={s.id} submissionId={s.id} summary={summary}>
+                    {detail}
+                  </PaidRow>
                 );
               }
               return (

@@ -5,11 +5,11 @@ import {
   PanelRowShell,
   type PanelRowSummary,
 } from "../_components/PanelRowShell";
-import { RowTick } from "../_components/PaySelection";
+import { RowTick, RowTickSpacer } from "../_components/PaySelection";
 // The pay verb stays in ../finance, next to the state machine it drives —
 // there is one payment path, and a lead calling it is the same call finance
 // makes (requirePayer in lib/payroll.ts scopes it to their people).
-import { confirmPayment } from "../finance/actions";
+import { confirmPayment, undoPayment } from "../finance/actions";
 
 /**
  * A request this lead has already approved, plus the move that finishes it:
@@ -73,6 +73,83 @@ export function SettleRow({
             Once they have the money: this records the fine deductions, marks
             the bonuses paid out, and emails them the final invoice.
           </p>
+          {error && <p className="text-xs text-red-600">{error}</p>}
+        </div>
+      }
+    >
+      {children}
+    </PanelRowShell>
+  );
+}
+
+/**
+ * A request this lead has paid, plus the way back from a mis-click: undo the
+ * payment. Two steps on purpose — an undo reverses fine deductions, so it asks
+ * once. `undoPayment` re-checks status and filer server-side like the rest.
+ */
+export function PaidRow({
+  submissionId,
+  summary,
+  children,
+}: {
+  submissionId: string;
+  summary: PanelRowSummary;
+  children: ReactNode;
+}) {
+  const [asking, setAsking] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [isPending, startTransition] = useTransition();
+
+  function undo() {
+    setError(null);
+    startTransition(async () => {
+      try {
+        const res = await undoPayment(submissionId);
+        if (!res.ok) setError(res.error);
+      } catch {
+        setError("Couldn't undo — try again.");
+      }
+    });
+  }
+
+  return (
+    <PanelRowShell
+      summary={summary}
+      select={<RowTickSpacer />}
+      footer={
+        <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-line pt-3">
+          {asking ? (
+            <>
+              <button
+                type="button"
+                disabled={isPending}
+                onClick={undo}
+                className="rounded-lg bg-red-600 px-3.5 py-2 text-sm font-semibold text-white transition hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {isPending ? "Undoing…" : "Yes, undo payment"}
+              </button>
+              <button
+                type="button"
+                disabled={isPending}
+                onClick={() => setAsking(false)}
+                className="rounded-lg border border-line px-3.5 py-2 text-sm font-medium text-muted-fg transition hover:text-ink"
+              >
+                Cancel
+              </button>
+              <p className="min-w-0 flex-1 text-xs text-muted-fg">
+                Puts it back to waiting for payment and reverses the fine
+                deductions it recorded.
+              </p>
+            </>
+          ) : (
+            <button
+              type="button"
+              onClick={() => setAsking(true)}
+              className="rounded-lg border border-line px-3.5 py-2 text-sm font-medium text-muted-fg transition hover:text-ink"
+            >
+              Undo payment
+            </button>
+          )}
           {error && <p className="text-xs text-red-600">{error}</p>}
         </div>
       }
