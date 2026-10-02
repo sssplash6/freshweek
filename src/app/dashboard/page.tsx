@@ -44,6 +44,7 @@ import {
   reconcileDailyReportReminders,
 } from "@/lib/dailyReportFines";
 import {
+  canSeeAllPayroll,
   reconcilePayrollReminders,
   submissionNeedingPaymentDetails,
 } from "@/lib/payroll";
@@ -85,6 +86,7 @@ import { AssignedTasks } from "./_components/AssignedTasks";
 import { AssignGoalButton } from "./_components/AssignGoalButton";
 import { DailyReportPrompt } from "./_components/DailyReportPrompt";
 import { MarketingPrompt } from "./_components/MarketingPrompt";
+import { QuickLinks } from "./_components/QuickLinks";
 import { BirthdayPrompt } from "./_components/BirthdayPrompt";
 import { BirthdayBoard } from "./_components/BirthdayBoard";
 import {
@@ -851,6 +853,15 @@ export default async function DashboardPage({
           predate the field could never be told what was wanted. They're let
           in now and nagged here. */}
       {profile.birthday == null && <BirthdayPrompt maxYmd={todayYmd} />}
+
+      <QuickLinks
+        showDepartment={viewerIsLead}
+        showAllDepartments={viewerIsAdmin && !viewerIsLead}
+        showPayroll={viewerIsAdmin}
+        payrollHref={
+          canSeeAllPayroll(session!.user.email) ? "/payroll/panel" : "/payroll"
+        }
+      />
 
       <PeriodToggle view={view} showDaily={dailyReporter || reportRecipient} />
 
