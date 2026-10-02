@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 import { redirect } from "next/navigation";
 
 export const metadata: Metadata = { title: "Dashboard" };
@@ -44,7 +45,6 @@ import {
   reconcileDailyReportReminders,
 } from "@/lib/dailyReportFines";
 import {
-  canSeeAllPayroll,
   reconcilePayrollReminders,
   submissionNeedingPaymentDetails,
 } from "@/lib/payroll";
@@ -86,7 +86,6 @@ import { AssignedTasks } from "./_components/AssignedTasks";
 import { AssignGoalButton } from "./_components/AssignGoalButton";
 import { DailyReportPrompt } from "./_components/DailyReportPrompt";
 import { MarketingPrompt } from "./_components/MarketingPrompt";
-import { QuickLinks } from "./_components/QuickLinks";
 import { BirthdayPrompt } from "./_components/BirthdayPrompt";
 import { BirthdayBoard } from "./_components/BirthdayBoard";
 import {
@@ -813,6 +812,14 @@ export default async function DashboardPage({
           </h1>
         </div>
         <div className="flex shrink-0 items-center gap-2 sm:gap-4">
+          {(viewerIsLead || viewerIsAdmin) && (
+            <Link
+              href={viewerIsLead ? "/department" : "/departments"}
+              className="hidden items-center whitespace-nowrap rounded-lg border border-line bg-surface px-3 py-1.5 text-sm font-medium text-brand transition hover:bg-canvas hover:ring-2 hover:ring-brand-soft sm:inline-flex"
+            >
+              {viewerIsLead ? "My Department" : "Departments"}
+            </Link>
+          )}
           <WeekProgress percent={overall} label={isMonth ? "Month" : "Week"} />
           <div className="flex items-center gap-2">
             <SignupRequestsButton
@@ -853,15 +860,6 @@ export default async function DashboardPage({
           predate the field could never be told what was wanted. They're let
           in now and nagged here. */}
       {profile.birthday == null && <BirthdayPrompt maxYmd={todayYmd} />}
-
-      <QuickLinks
-        showDepartment={viewerIsLead}
-        showAllDepartments={viewerIsAdmin && !viewerIsLead}
-        showPayroll={viewerIsAdmin}
-        payrollHref={
-          canSeeAllPayroll(session!.user.email) ? "/payroll/panel" : "/payroll"
-        }
-      />
 
       <PeriodToggle view={view} showDaily={dailyReporter || reportRecipient} />
 
