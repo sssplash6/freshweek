@@ -268,15 +268,21 @@ function ReportForm({
   );
 }
 
-function ShootItem({
+export function ShootItem({
   shoot,
   members,
   clock,
+  id,
+  highlighted = false,
 }: {
   shoot: ShootRow;
   members: Member[];
   /** What the left column shows: the time (under a day heading) or the full date. */
   clock: "time" | "when";
+  /** DOM id so the calendar's day card can scroll this row into view. */
+  id?: string;
+  /** Tinted when its chip was the one clicked on the grid. */
+  highlighted?: boolean;
 }) {
   const [mode, setMode] = useState<"view" | "edit" | "report" | "delete">("view");
   const { pending, error, setError, run } = useAction();
@@ -289,7 +295,7 @@ function ShootItem({
   const done = () => setMode("view");
 
   return (
-    <li className="px-4 py-3">
+    <li id={id} className={`px-4 py-3${highlighted ? " bg-brand-soft/40" : ""}`}>
       <div className="flex items-start gap-3">
         <RowClock clock={clock} dayLabel={shoot.dayLabel} timeLabel={shoot.timeLabel} />
         <div className="min-w-0 flex-1">

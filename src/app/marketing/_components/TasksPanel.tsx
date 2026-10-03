@@ -228,7 +228,19 @@ const DUE_TEXT: Record<TaskDue, string> = {
   none: "text-muted-fg",
 };
 
-function TaskItem({ task, members }: { task: TaskRow; members: Member[] }) {
+export function TaskItem({
+  task,
+  members,
+  id,
+  highlighted = false,
+}: {
+  task: TaskRow;
+  members: Member[];
+  /** DOM id so the calendar's day card can scroll this row into view. */
+  id?: string;
+  /** Tinted when its chip was the one clicked on the grid. */
+  highlighted?: boolean;
+}) {
   const [mode, setMode] = useState<"view" | "edit" | "delete">("view");
   const { pending, error, setError, run } = useAction();
   const toggle = (m: typeof mode) => {
@@ -238,7 +250,7 @@ function TaskItem({ task, members }: { task: TaskRow; members: Member[] }) {
   const done = () => setMode("view");
 
   return (
-    <li className="px-4 py-3">
+    <li id={id} className={`px-4 py-3${highlighted ? " bg-brand-soft/40" : ""}`}>
       <div className="flex items-start gap-3">
         {task.canMove ? (
           <button

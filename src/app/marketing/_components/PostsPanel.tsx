@@ -290,14 +290,20 @@ function CopyButton({ text }: { text: string }) {
   );
 }
 
-function PostItem({
+export function PostItem({
   post,
   shootOptions,
   clock,
+  id,
+  highlighted = false,
 }: {
   post: PostRow;
   shootOptions: ShootOption[];
   clock: "time" | "when";
+  /** DOM id so the calendar's day card can scroll this row into view. */
+  id?: string;
+  /** Tinted when its chip was the one clicked on the grid. */
+  highlighted?: boolean;
 }) {
   const [mode, setMode] = useState<"view" | "edit" | "publish" | "delete">("view");
   const [showCaption, setShowCaption] = useState(false);
@@ -310,7 +316,7 @@ function PostItem({
   const done = () => setMode("view");
 
   return (
-    <li className="px-4 py-3">
+    <li id={id} className={`px-4 py-3${highlighted ? " bg-brand-soft/40" : ""}`}>
       <div className="flex items-start gap-3">
         <RowClock clock={clock} dayLabel={post.dayLabel} timeLabel={post.timeLabel} />
         <div className="min-w-0 flex-1">

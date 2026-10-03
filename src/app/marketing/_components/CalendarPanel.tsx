@@ -1,27 +1,20 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { formatYmd, parseYmd, toYmd } from "@/lib/dates";
 import { dayLabel } from "@/lib/dailyReportTypes";
-import {
-  addDaysYmd,
-  POST_PLATFORM_LABEL,
-  POST_STATE,
-  SHOOT_STATE,
-} from "@/lib/marketing";
+import { addDaysYmd } from "@/lib/marketing";
 import { ChevronIcon, PlusIcon } from "../../dashboard/_components/icons";
 import { delegateTask, planShoot, schedulePost } from "../actions";
-import { PostForm, type PostRow, type ShootOption } from "./PostsPanel";
-import { ShootForm, type ShootRow } from "./ShootsPanel";
-import { TaskForm, type TaskRow } from "./TasksPanel";
+import { PostForm, PostItem, type PostRow, type ShootOption } from "./PostsPanel";
+import { ShootForm, ShootItem, type ShootRow } from "./ShootsPanel";
+import { TaskForm, TaskItem, type TaskRow } from "./TasksPanel";
 import {
   addBtn,
   iconBtn,
   type Member,
-  MemberChip,
   PanelHeader,
   secondaryBtn,
-  StatePill,
   useAction,
 } from "./ui";
 
@@ -32,10 +25,12 @@ import {
 // meaning per the palette semantics in globals.css — and only flip to a state
 // color (warn/bad) when the row needs attention, matching the StatePill rules
 // the lists below use. The selected day sits on top of the grid like a
-// calendar app's day card: click a date and the block shows what's on it plus
-// the three things you can add there — a shoot, a post or a task — each form
-// opening right in the card with that date pre-filled. Editing existing rows
-// stays in the panels below.
+// calendar app's day card: click anywhere on a cell and the card lists what's
+// on it — the same interactive rows the panels below use, so a shoot's
+// report form, a post's publish button and a task's progress all work right
+// there — plus the three things you can add on that date, each form opening
+// in the card with the date pre-filled. Clicking a chip goes further: it
+// selects the day AND spotlights that row, scrolling it into view.
 
 type CalItem =
   | { kind: "shoot"; row: ShootRow }
@@ -119,7 +114,7 @@ function chipCls(item: CalItem): string {
   }
 }
 
-/** The type dot for the agenda row — the same hue the chip carries. */
+/** The type dot in the legend — the same hue the chip carries. */
 const DOT_CLS: Record<CalItem["kind"], string> = {
   shoot: "bg-guide-indigo-ink",
   post: "bg-guide-plum-ink",
@@ -149,9 +144,12 @@ function chipText(item: CalItem): string {
 }
 
 /**
- * The clicked day's card, pinned above the grid: its items, then the three
- * things that can land on it. Picking an action unfolds that form in place —
- * Google Calendar's click-a-day popover, flattened into the card.
+ * The clicked day's card, pinned above the grid: its items — the same
+ * interactive rows the panels below render, so everything that can be done
+ * to a shoot, post or task works here too — then the three things that can
+ * land on the day. Picking an action unfolds that form in place — Google
+ * Calendar's click-a-day popover, flattened into the card. A chip click
+ * arrives as openKey: that row is tinted and scrolled into view.
  */
 function DayAgenda({
   items,
@@ -159,12 +157,14 @@ function DayAgenda({
   todayYmd,
   members,
   shootOptions,
+  openKey,
 }: {
   items: CalItem[];
   ymd: string;
   todayYmd: string;
   members: Member[];
   shootOptions: ShootOption[];
+  openKey: string | null;
 }) {
   const [composing, setComposing] = useState<CalItem["kind"] | null>(null);
   const { pending, error, setError, run } = useAction();
@@ -174,6 +174,15 @@ function DayAgenda({
   };
   const close = () => setComposing(null);
   const dateLabel = dayLabel(ymd, Number(todayYmd.slice(0, 4)));
+
+  // Bring the clicked chip's row into view — on a crowded day it can sit
+  // above the fold of the card.
+  useEffect(() => {
+    if (!openKey) return;
+    document
+      .getElementById(`cal-${openKey}`)
+      ?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  }, [openKey]);
 
   return (
     <div className="mb-3 overflow-hidden rounded-xl border border-line bg-surface">
@@ -196,9 +205,44 @@ function DayAgenda({
         </p>
       ) : (
         <ul className="divide-y divide-line">
-          {items.map((item) => (
-            <AgendaItem key={`${item.kind}-${item.row.id}`} item={item} />
-          ))}
+          {items.map((item) => {
+            const key = `${item.kind}-${item.row.id}`;
+            const spotlight = {
+              id: `cal-${key}`,
+              highlighted: key === openKey,
+            };
+            switch (item.kind) {
+              case "shoot":
+                return (
+                  <ShootItem
+                    key={key}
+                    {...spotlight}
+                    shoot={item.row}
+                    members={members}
+                    clock="time"
+                  />
+                );
+              case "post":
+                return (
+                  <PostItem
+                    key={key}
+                    {...spotlight}
+                    post={item.row}
+                    shootOptions={shootOptions}
+                    clock="time"
+                  />
+                );
+              case "task":
+                return (
+                  <TaskItem
+                    key={key}
+                    {...spotlight}
+                    task={item.row}
+                    members={members}
+                  />
+                );
+            }
+          })}
         </ul>
       )}
       {composing === null ? (
@@ -259,96 +303,6 @@ function DayAgenda({
   );
 }
 
-function AgendaItem({ item }: { item: CalItem }) {
-  return (
-    <li className="flex items-start gap-3 px-4 py-3">
-      <span
-        className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ${DOT_CLS[item.kind]}`}
-        aria-hidden="true"
-      />
-      <div className="min-w-0 flex-1">
-        {item.kind === "shoot" && <ShootAgenda shoot={item.row} />}
-        {item.kind === "post" && <PostAgenda post={item.row} />}
-        {item.kind === "task" && <TaskAgenda task={item.row} />}
-      </div>
-    </li>
-  );
-}
-
-function ShootAgenda({ shoot }: { shoot: ShootRow }) {
-  return (
-    <>
-      <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
-        <span className="break-words text-sm font-semibold text-ink">{shoot.title}</span>
-        {shoot.state !== "upcoming" && <StatePill {...SHOOT_STATE[shoot.state]} />}
-      </div>
-      <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-fg">
-        <span className="tabular-nums">{shoot.timeLabel}</span>
-        <span className="break-words">{shoot.location}</span>
-        {shoot.assignee ? (
-          <MemberChip m={shoot.assignee} />
-        ) : (
-          <span className="font-medium text-chart-warn">Nobody filming yet</span>
-        )}
-        {shoot.postCount > 0 && (
-          <span>
-            {shoot.postCount === 1 ? "1 post planned" : `${shoot.postCount} posts planned`}
-          </span>
-        )}
-      </div>
-    </>
-  );
-}
-
-function PostAgenda({ post }: { post: PostRow }) {
-  return (
-    <>
-      <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
-        <span className="break-words text-sm font-semibold text-ink">{post.title}</span>
-        {post.state !== "scheduled" && <StatePill {...POST_STATE[post.state]} />}
-      </div>
-      <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-fg">
-        <span className="tabular-nums">{post.timeLabel}</span>
-        {post.platforms.length > 0 ? (
-          <span>{post.platforms.map((p) => POST_PLATFORM_LABEL[p]).join(" · ")}</span>
-        ) : (
-          <span>No channel picked</span>
-        )}
-        {post.shoot && <span className="min-w-0 break-words">From “{post.shoot.title}”</span>}
-      </div>
-    </>
-  );
-}
-
-function TaskAgenda({ task }: { task: TaskRow }) {
-  return (
-    <>
-      <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
-        <span
-          className={`break-words text-sm font-semibold ${
-            task.done ? "text-muted-fg line-through decoration-muted-fg/40" : "text-ink"
-          }`}
-        >
-          {task.title}
-        </span>
-        {!task.done && task.due === "overdue" && (
-          <span className="text-xs font-semibold text-chart-bad">Overdue</span>
-        )}
-        {!task.done && task.due === "today" && (
-          <span className="text-xs font-semibold text-chart-warn">Due today</span>
-        )}
-      </div>
-      <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-fg">
-        <span>{task.setterName}</span>
-        <span aria-hidden="true">→</span>
-        <MemberChip m={task.assignee} />
-        {!task.done && <span className="tabular-nums">{task.percent}%</span>}
-        {task.completedLabel && <span>· {task.completedLabel}</span>}
-      </div>
-    </>
-  );
-}
-
 export function CalendarPanel({
   shoots,
   posts,
@@ -366,6 +320,12 @@ export function CalendarPanel({
 }) {
   const [month, setMonth] = useState(todayYmd.slice(0, 7));
   const [selected, setSelected] = useState(todayYmd);
+  /** The chip last clicked — its row is spotlighted in the day card. */
+  const [openKey, setOpenKey] = useState<string | null>(null);
+  const select = (ymd: string, key: string | null = null) => {
+    setSelected(ymd);
+    setOpenKey(key);
+  };
 
   const itemsByDay = useMemo(() => {
     const map = new Map<string, CalItem[]>();
@@ -411,6 +371,7 @@ export function CalendarPanel({
         todayYmd={todayYmd}
         members={members}
         shootOptions={shootOptions}
+        openKey={openKey}
       />
 
       <div className="mb-2 flex items-center gap-1 px-1">
@@ -438,7 +399,7 @@ export function CalendarPanel({
             type="button"
             onClick={() => {
               setMonth(todayYmd.slice(0, 7));
-              setSelected(todayYmd);
+              select(todayYmd);
             }}
             className={`${secondaryBtn} ms-1`}
           >
@@ -466,19 +427,26 @@ export function CalendarPanel({
             const isSelected = ymd === selected;
             const dayNum = Number(ymd.slice(8));
             return (
+              // The whole cell is the click target — the number button stays
+              // for keyboard users. Chips stop the bubble: their click selects
+              // the day AND opens that item, not just the day.
               <div
                 key={ymd}
-                className={`flex min-h-[4.5rem] flex-col gap-0.5 p-1 sm:min-h-24 sm:p-1.5 ${
+                onClick={() => select(ymd)}
+                className={`flex min-h-[4.5rem] cursor-pointer flex-col gap-0.5 p-1 transition sm:min-h-24 sm:p-1.5 ${
                   isSelected
                     ? "bg-brand-soft/60"
                     : inMonth
-                      ? "bg-surface"
-                      : "bg-canvas/60"
+                      ? "bg-surface hover:bg-canvas"
+                      : "bg-canvas/60 hover:bg-canvas"
                 }`}
               >
                 <button
                   type="button"
-                  onClick={() => setSelected(ymd)}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    select(ymd);
+                  }}
                   aria-label={`${dayLabel(ymd)} — ${items.length === 0 ? "nothing planned" : `${items.length} items`}`}
                   aria-pressed={isSelected}
                   className={`flex h-6 min-w-6 items-center justify-center self-start rounded-full px-1 text-[11px] font-semibold tabular-nums ${
@@ -497,7 +465,10 @@ export function CalendarPanel({
                   <button
                     key={`${item.kind}-${item.row.id}`}
                     type="button"
-                    onClick={() => setSelected(ymd)}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      select(ymd, `${item.kind}-${item.row.id}`);
+                    }}
                     title={chipText(item)}
                     className={`block w-full truncate rounded px-1.5 py-0.5 text-left text-[11px] font-medium leading-4 transition hover:brightness-95 ${chipCls(item)}`}
                   >
@@ -507,7 +478,10 @@ export function CalendarPanel({
                 {items.length > MAX_CHIPS && (
                   <button
                     type="button"
-                    onClick={() => setSelected(ymd)}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      select(ymd);
+                    }}
                     className="px-1.5 text-left text-[11px] font-medium text-muted-fg transition hover:text-ink"
                   >
                     +{items.length - MAX_CHIPS} more
