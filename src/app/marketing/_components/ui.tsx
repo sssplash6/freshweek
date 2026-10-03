@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useTransition, type ReactNode } from "react";
+import { useLayoutEffect, useRef, useState, useTransition, type ReactNode } from "react";
 import type { ActionResult } from "@/lib/actionResult";
 import { XIcon } from "../../dashboard/_components/icons";
 
@@ -210,6 +210,45 @@ export function EmptyState({ children }: { children: ReactNode }) {
   return (
     <div className="rounded-xl border border-dashed border-line px-4 py-6 text-center text-sm text-muted-fg">
       {children}
+    </div>
+  );
+}
+
+/**
+ * A row's free-text note (a shoot's brief, a task's detail), held to three
+ * lines so one long brief can't stretch a whole list. "Show more" appears only
+ * when the text actually runs past the clamp.
+ */
+export function ClampedNote({ children }: { children: string }) {
+  const ref = useRef<HTMLParagraphElement>(null);
+  const [open, setOpen] = useState(false);
+  const [overflows, setOverflows] = useState(false);
+
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el || open) return;
+    const measure = () => setOverflows(el.scrollHeight > el.clientHeight + 1);
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [children, open]);
+
+  return (
+    <div className="mt-1.5 text-xs text-muted-fg">
+      <p ref={ref} className={`whitespace-pre-wrap break-words${open ? "" : " line-clamp-3"}`}>
+        {children}
+      </p>
+      {(overflows || open) && (
+        <button
+          type="button"
+          onClick={() => setOpen(!open)}
+          aria-expanded={open}
+          className="mt-0.5 font-medium text-ink/70 hover:text-ink hover:underline"
+        >
+          {open ? "Show less" : "Show more"}
+        </button>
+      )}
     </div>
   );
 }

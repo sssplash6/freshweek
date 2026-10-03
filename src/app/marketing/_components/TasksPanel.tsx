@@ -18,6 +18,7 @@ import {
   addBtn,
   Archive,
   assigneeOptions,
+  ClampedNote,
   ConfirmBar,
   dangerIconBtn,
   EmptyState,
@@ -305,9 +306,7 @@ export function TaskItem({
             {task.completedLabel && <span>· {task.completedLabel}</span>}
           </div>
           {task.note && mode !== "edit" && (
-            <p className="mt-1.5 whitespace-pre-wrap break-words text-xs text-muted-fg">
-              {task.note}
-            </p>
+            <ClampedNote>{task.note}</ClampedNote>
           )}
           {!task.done && (
             <div className="mt-2">

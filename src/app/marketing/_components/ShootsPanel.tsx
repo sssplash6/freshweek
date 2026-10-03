@@ -19,6 +19,7 @@ import {
   addBtn,
   Archive,
   assigneeOptions,
+  ClampedNote,
   byDay,
   ConfirmBar,
   dangerIconBtn,
@@ -319,9 +320,7 @@ export function ShootItem({
             )}
           </div>
           {shoot.note && mode !== "edit" && (
-            <p className="mt-1.5 whitespace-pre-wrap break-words text-xs text-muted-fg">
-              {shoot.note}
-            </p>
+            <ClampedNote>{shoot.note}</ClampedNote>
           )}
           {mode !== "report" && (shoot.finishedUrl || shoot.rawUrl || reported) && (
             <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">

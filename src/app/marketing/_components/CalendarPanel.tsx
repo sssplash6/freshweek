@@ -350,19 +350,7 @@ export function CalendarPanel({
       <PanelHeader
         title="Calendar"
         hint="The whole department's month at a glance — shoots, posts and task deadlines together."
-      >
-        <div className="flex shrink-0 items-center gap-3 pt-1">
-          {(Object.keys(DOT_CLS) as CalItem["kind"][]).map((k) => (
-            <span
-              key={k}
-              className="inline-flex items-center gap-1.5 text-[11px] font-medium text-muted-fg"
-            >
-              <span className={`h-2 w-2 rounded-full ${DOT_CLS[k]}`} />
-              {KIND_LABEL[k]}
-            </span>
-          ))}
-        </div>
-      </PanelHeader>
+      />
 
       <DayAgenda
         key={selected}
@@ -406,6 +394,17 @@ export function CalendarPanel({
             Today
           </button>
         )}
+        <div className="ms-auto flex shrink-0 items-center gap-3">
+          {(Object.keys(DOT_CLS) as CalItem["kind"][]).map((k) => (
+            <span
+              key={k}
+              className="inline-flex items-center gap-1.5 text-[11px] font-medium text-muted-fg"
+            >
+              <span className={`h-2 w-2 rounded-full ${DOT_CLS[k]}`} />
+              {KIND_LABEL[k]}
+            </span>
+          ))}
+        </div>
       </div>
 
       <div className="overflow-hidden rounded-xl border border-line">
