@@ -101,6 +101,9 @@ export function PayrollForm({
   const [base, setBase] = useState(
     prefill.baseSalary != null ? String(prefill.baseSalary) : "",
   );
+  // Optional second base salary (another department). Not stored separately:
+  // it is summed into the one baseSalary figure everything downstream uses.
+  const [base2, setBase2] = useState<string | null>(null);
   const [expenses, setExpenses] = useState<ExpenseDraft[]>(() =>
     (prefill.expenses ?? []).map((e, i) => ({
       key: i + 1,
@@ -122,7 +125,11 @@ export function PayrollForm({
   const [error, setError] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
 
-  const baseValue = /^\d+$/.test(base.trim()) ? Number(base.trim()) : null;
+  const base1Value = /^\d+$/.test(base.trim()) ? Number(base.trim()) : null;
+  const base2Trim = base2?.trim() ?? "";
+  const base2Value = base2Trim === "" ? 0 : /^\d+$/.test(base2Trim) ? Number(base2Trim) : null;
+  const baseValue =
+    base1Value == null || base2Value == null ? null : base1Value + base2Value;
   const expensesTotalCents = expenses.reduce(
     (s, e) => s + (parseAmountCents(e.amount) ?? 0),
     0,
@@ -319,6 +326,38 @@ export function PayrollForm({
             placeholder="500"
             className="w-32 rounded-lg border border-line px-3 py-2 text-sm tabular-nums text-ink placeholder:text-muted-fg focus:border-brand focus:outline-none"
           />
+          {base2 === null ? (
+            <button
+              type="button"
+              onClick={() => setBase2("")}
+              aria-label="Add a base salary from another department"
+              title="Add a base salary from another department"
+              className="flex h-9 w-9 items-center justify-center rounded-lg border border-line text-lg leading-none text-muted-fg hover:border-brand hover:text-brand"
+            >
+              +
+            </button>
+          ) : (
+            <>
+              <span className="text-sm font-semibold text-muted-fg">+ $</span>
+              <input
+                type="text"
+                inputMode="numeric"
+                value={base2}
+                onChange={(e) => setBase2(e.target.value)}
+                placeholder="Other department"
+                aria-label="Second base salary (other department)"
+                className="w-32 rounded-lg border border-line px-3 py-2 text-sm tabular-nums text-ink placeholder:text-muted-fg focus:border-brand focus:outline-none"
+              />
+              <button
+                type="button"
+                onClick={() => setBase2(null)}
+                aria-label="Remove the second base salary"
+                className="flex h-9 w-9 items-center justify-center rounded-lg border border-line text-lg leading-none text-muted-fg hover:border-red-300 hover:text-red-600"
+              >
+                ×
+              </button>
+            </>
+          )}
         </div>
       </div>
 
