@@ -13,6 +13,7 @@ const BUILT_IN_REPORTERS = [
   "classes@freshman.academy",
   "khusanboy@freshman.academy",
   "shakhzod@freshman.academy",
+  "shokhrukh@freshman.academy",
 ];
 
 const BUILT_IN_RECIPIENT = "valera@freshman.academy";
@@ -39,7 +40,9 @@ export function isDailyReporter(email: string | null | undefined): boolean {
 // day the rule started, lib/dailyReportTypes.ts) — anyone who joins the list
 // later gets an entry here so the sweep's lookback can't reach days from
 // before they owed reports.
-const DAILY_REPORTER_SINCE: Record<string, string> = {};
+const DAILY_REPORTER_SINCE: Record<string, string> = {
+  "shokhrukh@freshman.academy": "2026-10-05",
+};
 
 /** The first Tashkent day (YMD) this reporter's fines can apply to. */
 export function dailyReporterSinceYmd(
@@ -65,6 +68,7 @@ const REPORTER_FIRST_NAMES: Record<string, string> = {
   "classes@freshman.academy": "Shokhrukh",
   "khusanboy@freshman.academy": "Khusanboy",
   "shakhzod@freshman.academy": "Shakhzod",
+  "shokhrukh@freshman.academy": "Shokhrukh",
 };
 
 /** The name daily-report surfaces call this person by. */
