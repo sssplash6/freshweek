@@ -12,16 +12,16 @@ export type Member = { id: string; name: string; emoji: string; bg: string };
 export const inputCls =
   "w-full min-w-0 rounded-lg border border-line bg-surface px-2.5 py-1.5 text-sm text-ink placeholder:text-muted-fg focus:border-brand focus:outline-none disabled:opacity-60";
 export const primaryBtn =
-  "inline-flex items-center justify-center gap-1.5 rounded-lg bg-brand px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-brand-dark disabled:cursor-not-allowed disabled:opacity-50";
+  "ro:hidden inline-flex items-center justify-center gap-1.5 rounded-lg bg-brand px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-brand-dark disabled:cursor-not-allowed disabled:opacity-50";
 export const secondaryBtn =
   "inline-flex items-center justify-center gap-1.5 rounded-lg border border-line bg-surface px-2.5 py-1 text-xs font-semibold text-brand transition hover:bg-canvas disabled:cursor-not-allowed disabled:opacity-50";
 export const ghostBtn =
   "inline-flex items-center justify-center rounded-lg px-2.5 py-1.5 text-xs font-semibold text-muted-fg transition hover:bg-canvas hover:text-ink disabled:opacity-50";
 export const iconBtn =
   "rounded-lg p-1.5 text-muted-fg transition hover:bg-canvas hover:text-ink disabled:opacity-50";
-export const dangerIconBtn = `${iconBtn} hover:bg-red-500/10 hover:text-red-600`;
+export const dangerIconBtn = `ro:hidden ${iconBtn} hover:bg-red-500/10 hover:text-red-600`;
 export const addBtn =
-  "inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-dashed border-line px-2.5 py-1.5 text-xs font-semibold text-muted-fg transition hover:border-brand hover:text-brand";
+  "ro:hidden inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-dashed border-line px-2.5 py-1.5 text-xs font-semibold text-muted-fg transition hover:border-brand hover:text-brand";
 export const linkCls = "font-medium text-brand hover:underline";
 
 /**

@@ -838,7 +838,7 @@ export default async function DashboardPage({
               avatar={avatar}
               isAdmin={isAdmin(session!.user.email)}
               isLead={viewerIsLead}
-              isMarketing={viewerIsMarketing}
+              isMarketing={viewerIsMarketing || viewerIsLead}
             />
           </div>
         </div>

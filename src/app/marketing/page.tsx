@@ -17,7 +17,7 @@ import {
   tashkentHm,
   tashkentYmd,
 } from "@/lib/marketing";
-import { marketingAccess, marketingMembers } from "@/lib/marketingAccess";
+import { isDepartmentLead, marketingAccess, marketingMembers } from "@/lib/marketingAccess";
 import { prisma } from "@/lib/prisma";
 import { reconcileShootReminders } from "@/lib/shootReminders";
 import { CalendarPanel } from "./_components/CalendarPanel";
@@ -57,8 +57,14 @@ export default async function MarketingPage() {
   const session = await auth();
   if (!session?.user?.id) redirect("/signin");
   await assertApproved(session.user);
-  const access = await marketingAccess(session.user);
+  const access =
+    (await marketingAccess(session.user)) ??
+    ((await isDepartmentLead(session.user.id))
+      ? { member: false, manager: false }
+      : null);
   if (!access) redirect("/dashboard");
+  // Other departments' leads: look, don't touch (see lib/marketingAccess.ts).
+  const viewOnly = !access.member && !access.manager;
 
   // Upcoming-shoot reminders ride page loads — the lazy no-cron pattern the
   // dashboard already runs for fines and the payroll nudge. Best-effort.
@@ -267,7 +273,10 @@ export default async function MarketingPage() {
   const toneText = { plain: "text-ink", warn: "text-chart-warn", bad: "text-chart-bad" };
 
   return (
-    <div className="mx-auto w-full max-w-5xl flex-1 px-4 py-8">
+    <div
+      data-readonly={viewOnly ? "" : undefined}
+      className="mx-auto w-full max-w-5xl flex-1 px-4 py-8"
+    >
       <header className="mb-6 flex items-start justify-between gap-4">
         <div className="min-w-0">
           <div className="text-xs font-semibold uppercase tracking-widest text-brand">
@@ -275,8 +284,10 @@ export default async function MarketingPage() {
           </div>
           <h1 className="mt-1 text-2xl font-bold text-ink">Content plan</h1>
           <p className="mt-1 text-sm text-muted-fg">
-            Plan shoots, schedule posts and hand each other work. All times are
-            Tashkent time (GMT+5).
+            {viewOnly
+              ? "View only: the marketing team runs this plan."
+              : "Plan shoots, schedule posts and hand each other work."}{" "}
+            All times are Tashkent time (GMT+5).
           </p>
         </div>
         <BackLink href="/dashboard" label="Dashboard" />

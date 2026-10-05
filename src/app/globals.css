@@ -1,5 +1,8 @@
 @import "tailwindcss";
 
+/* ro: inside a read-only view (an element carrying data-readonly). */
+@custom-variant ro (&:where([data-readonly], [data-readonly] *));
+
 /* Brand palette — minimal: blue for chrome/actions, orange for progress, grey neutrals. */
 @theme {
   --color-canvas: #f4f5f6; /* page background */

@@ -246,7 +246,7 @@ function DayAgenda({
         </ul>
       )}
       {composing === null ? (
-        <div className="flex flex-wrap items-center gap-1.5 border-t border-line bg-canvas/50 px-3 py-2">
+        <div className="ro:hidden flex flex-wrap items-center gap-1.5 border-t border-line bg-canvas/50 px-3 py-2">
           {(Object.keys(ADD_LABEL) as CalItem["kind"][]).map((kind) => (
             <button
               key={kind}

@@ -4,6 +4,9 @@
 // already manages it. Admins (the email allowlist) get in alongside, the same
 // way they reach every page.
 //
+// Every other department lead may open the plan read-only (page.tsx hides the
+// controls); marketingAccess below stays null for them, so every action refuses.
+//
 // Inside the plan, the department's LEAD and the admins are its managers: they
 // may edit or withdraw any teammate's task, so work set by someone who has
 // since left the department never gets stuck with nobody able to touch it.
@@ -31,12 +34,28 @@ export async function isMarketingMember(userId: string): Promise<boolean> {
   return (await marketingSeat(userId)) != null;
 }
 
-/** Whether this signed-in user may use the marketing content plan. */
+/** Whether this person leads any department (mini ones included). */
+export async function isDepartmentLead(userId: string): Promise<boolean> {
+  return (
+    (await prisma.departmentMembership.count({
+      where: { userId, role: "LEAD" },
+    })) > 0
+  );
+}
+
+/**
+ * Whether this signed-in user may open the marketing content plan: marketing
+ * members and admins to work in it, every other department lead to look.
+ */
 export async function isMarketingUser(user: {
   id: string;
   email?: string | null;
 }): Promise<boolean> {
-  return isAdmin(user.email) || isMarketingMember(user.id);
+  return (
+    isAdmin(user.email) ||
+    (await isMarketingMember(user.id)) ||
+    isDepartmentLead(user.id)
+  );
 }
 
 /**

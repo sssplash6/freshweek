@@ -385,7 +385,7 @@ export function PostItem({
             <button
               type="button"
               onClick={() => toggle("publish")}
-              className={`${post.state === "overdue" ? primaryBtn : secondaryBtn} mt-2`}
+              className={`ro:hidden ${post.state === "overdue" ? primaryBtn : secondaryBtn} mt-2`}
             >
               <CheckCircleIcon className="h-3.5 w-3.5" />
               Mark published
@@ -398,7 +398,7 @@ export function PostItem({
               <button
                 type="button"
                 onClick={() => toggle("publish")}
-                className={secondaryBtn}
+                className={`ro:hidden ${secondaryBtn}`}
                 aria-expanded={mode === "publish"}
               >
                 {post.postUrl ? "Edit link" : "Add link"}
@@ -408,7 +408,7 @@ export function PostItem({
                 disabled={pending}
                 onClick={() => run(() => unpublishPost(post.id))}
                 title="Not actually out — put it back on the calendar"
-                className={ghostBtn}
+                className={`ro:hidden ${ghostBtn}`}
               >
                 Undo
               </button>
@@ -421,7 +421,7 @@ export function PostItem({
                 title="Edit post"
                 aria-label={`Edit ${post.title}`}
                 aria-expanded={mode === "edit"}
-                className={`${iconBtn} ${mode === "edit" ? "bg-canvas text-ink" : ""}`}
+                className={`ro:hidden ${iconBtn} ${mode === "edit" ? "bg-canvas text-ink" : ""}`}
               >
                 <PencilIcon className="h-4 w-4" />
               </button>
@@ -557,7 +557,7 @@ export function PostsPanel({
       {empty && !composing && (
         <EmptyState>
           Nothing scheduled.{" "}
-          <button type="button" onClick={() => setComposing(true)} className={linkCls}>
+          <button type="button" onClick={() => setComposing(true)} className={`ro:hidden ${linkCls}`}>
             Schedule a post
           </button>
         </EmptyState>

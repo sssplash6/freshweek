@@ -354,7 +354,7 @@ export function ShootItem({
             <button
               type="button"
               onClick={() => toggle("report")}
-              className={secondaryBtn}
+              className={`ro:hidden ${secondaryBtn}`}
               aria-expanded={mode === "report"}
             >
               Edit links
@@ -367,7 +367,7 @@ export function ShootItem({
                 title="Edit shoot"
                 aria-label={`Edit ${shoot.title}`}
                 aria-expanded={mode === "edit"}
-                className={`${iconBtn} ${mode === "edit" ? "bg-canvas text-ink" : ""}`}
+                className={`ro:hidden ${iconBtn} ${mode === "edit" ? "bg-canvas text-ink" : ""}`}
               >
                 <PencilIcon className="h-4 w-4" />
               </button>
@@ -510,7 +510,7 @@ export function ShootsPanel({
       {empty && !composing && (
         <EmptyState>
           No shoots coming up.{" "}
-          <button type="button" onClick={() => setComposing(true)} className={linkCls}>
+          <button type="button" onClick={() => setComposing(true)} className={`ro:hidden ${linkCls}`}>
             Plan the next one
           </button>
         </EmptyState>

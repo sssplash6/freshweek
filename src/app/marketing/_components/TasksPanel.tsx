@@ -333,7 +333,7 @@ export function TaskItem({
               title="Edit task"
               aria-label={`Edit ${task.title}`}
               aria-expanded={mode === "edit"}
-              className={`${iconBtn} ${mode === "edit" ? "bg-canvas text-ink" : ""}`}
+              className={`ro:hidden ${iconBtn} ${mode === "edit" ? "bg-canvas text-ink" : ""}`}
             >
               <PencilIcon className="h-4 w-4" />
             </button>
@@ -502,7 +502,7 @@ export function TasksPanel({
               : filter === "set"
                 ? "You haven’t handed anything over."
                 : "No open tasks."}{" "}
-            <button type="button" onClick={() => setComposing(true)} className={linkCls}>
+            <button type="button" onClick={() => setComposing(true)} className={`ro:hidden ${linkCls}`}>
               Hand over a task
             </button>
           </EmptyState>
