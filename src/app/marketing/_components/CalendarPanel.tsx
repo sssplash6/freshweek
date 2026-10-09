@@ -1,10 +1,10 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { formatYmd, parseYmd, toYmd } from "@/lib/dates";
 import { dayLabel } from "@/lib/dailyReportTypes";
 import { addDaysYmd } from "@/lib/marketing";
-import { ChevronIcon, PlusIcon } from "../../dashboard/_components/icons";
+import { ChevronIcon, PlusIcon, XIcon } from "../../dashboard/_components/icons";
 import { delegateTask, planShoot, schedulePost } from "../actions";
 import { PostForm, PostItem, type PostRow, type ShootOption } from "./PostsPanel";
 import { ShootForm, ShootItem, type ShootRow } from "./ShootsPanel";
@@ -24,13 +24,13 @@ import {
 // identify the KIND of work — the guide document hues, which carry no state
 // meaning per the palette semantics in globals.css — and only flip to a state
 // color (warn/bad) when the row needs attention, matching the StatePill rules
-// the lists below use. The selected day sits on top of the grid like a
-// calendar app's day card: click anywhere on a cell and the card lists what's
-// on it — the same interactive rows the panels below use, so a shoot's
-// report form, a post's publish button and a task's progress all work right
-// there — plus the three things you can add on that date, each form opening
-// in the card with the date pre-filled. Clicking a chip goes further: it
-// selects the day AND spotlights that row, scrolling it into view.
+// the lists below use. Click anywhere on a cell and a drawer slides in from
+// the right listing what's on that day: the same interactive rows the panels
+// below use, so a shoot's report form, a post's publish button and a task's
+// progress all work right there, plus the three things you can add on that
+// date, each form opening in the drawer with the date pre-filled. Clicking a
+// chip goes further: it opens the day AND spotlights that row, scrolling it
+// into view.
 
 type CalItem =
   | { kind: "shoot"; row: ShootRow }
@@ -144,12 +144,12 @@ function chipText(item: CalItem): string {
 }
 
 /**
- * The clicked day's card, pinned above the grid: its items — the same
+ * The clicked day's drawer on the right edge: its items (the same
  * interactive rows the panels below render, so everything that can be done
- * to a shoot, post or task works here too — then the three things that can
- * land on the day. Picking an action unfolds that form in place — Google
- * Calendar's click-a-day popover, flattened into the card. A chip click
- * arrives as openKey: that row is tinted and scrolled into view.
+ * to a shoot, post or task works here too), then the three things that can
+ * land on the day. Picking an action unfolds that form in place. A chip
+ * click arrives as openKey: that row is tinted and scrolled into view. Not
+ * portaled, so the page's data-readonly still hides the controls in here.
  */
 function DayAgenda({
   items,
@@ -158,6 +158,7 @@ function DayAgenda({
   members,
   shootOptions,
   openKey,
+  onClose,
 }: {
   items: CalItem[];
   ymd: string;
@@ -165,6 +166,7 @@ function DayAgenda({
   members: Member[];
   shootOptions: ShootOption[];
   openKey: string | null;
+  onClose: () => void;
 }) {
   const [composing, setComposing] = useState<CalItem["kind"] | null>(null);
   const { pending, error, setError, run } = useAction();
@@ -184,122 +186,157 @@ function DayAgenda({
       ?.scrollIntoView({ block: "nearest", behavior: "smooth" });
   }, [openKey]);
 
+  useEffect(() => {
+    function onKey(ev: KeyboardEvent) {
+      if (ev.key === "Escape") onClose();
+    }
+    document.addEventListener("keydown", onKey);
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.removeEventListener("keydown", onKey);
+      document.body.style.overflow = prevOverflow;
+    };
+  }, [onClose]);
+
   return (
-    <div className="mb-3 overflow-hidden rounded-xl border border-line bg-surface">
-      <h3 className="flex items-baseline gap-2 border-b border-line px-4 py-2.5">
-        <span className="text-sm font-semibold text-ink">{dateLabel}</span>
-        {ymd === todayYmd && (
-          <span className="text-[11px] font-semibold uppercase tracking-wide text-brand">
-            Today
-          </span>
-        )}
-        {items.length > 0 && (
-          <span className="ms-auto text-xs font-normal text-muted-fg">
-            {items.length} {items.length === 1 ? "item" : "items"}
-          </span>
-        )}
-      </h3>
-      {items.length === 0 ? (
-        <p className="px-4 py-5 text-center text-sm text-muted-fg">
-          Nothing on this day.
-        </p>
-      ) : (
-        <ul className="divide-y divide-line">
-          {items.map((item) => {
-            const key = `${item.kind}-${item.row.id}`;
-            const spotlight = {
-              id: `cal-${key}`,
-              highlighted: key === openKey,
-            };
-            switch (item.kind) {
-              case "shoot":
-                return (
-                  <ShootItem
-                    key={key}
-                    {...spotlight}
-                    shoot={item.row}
-                    members={members}
-                    clock="time"
-                  />
-                );
-              case "post":
-                return (
-                  <PostItem
-                    key={key}
-                    {...spotlight}
-                    post={item.row}
-                    shootOptions={shootOptions}
-                    clock="time"
-                  />
-                );
-              case "task":
-                return (
-                  <TaskItem
-                    key={key}
-                    {...spotlight}
-                    task={item.row}
-                    members={members}
-                  />
-                );
-            }
-          })}
-        </ul>
-      )}
-      {composing === null ? (
-        <div className="ro:hidden flex flex-wrap items-center gap-1.5 border-t border-line bg-canvas/50 px-3 py-2">
-          {(Object.keys(ADD_LABEL) as CalItem["kind"][]).map((kind) => (
-            <button
-              key={kind}
-              type="button"
-              onClick={() => open(kind)}
-              className={addBtn}
-            >
-              <PlusIcon className="h-3.5 w-3.5" />
-              {ADD_LABEL[kind]}
-            </button>
-          ))}
+    <>
+      <div
+        className="overlay-in fixed inset-0 z-40 bg-ink/20"
+        onClick={onClose}
+        aria-hidden="true"
+      />
+      <aside
+        role="dialog"
+        aria-modal="true"
+        aria-label={dateLabel}
+        className="drawer-in fixed inset-y-0 right-0 z-50 flex w-full max-w-md flex-col border-l border-line bg-surface shadow-xl"
+      >
+        <h3 className="flex shrink-0 items-center gap-2 border-b border-line px-4 py-3">
+          <span className="text-sm font-semibold text-ink">{dateLabel}</span>
+          {ymd === todayYmd && (
+            <span className="text-[11px] font-semibold uppercase tracking-wide text-brand">
+              Today
+            </span>
+          )}
+          {items.length > 0 && (
+            <span className="text-xs font-normal text-muted-fg">
+              · {items.length} {items.length === 1 ? "item" : "items"}
+            </span>
+          )}
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close"
+            className={`${iconBtn} ms-auto`}
+          >
+            <XIcon className="h-4 w-4" />
+          </button>
+        </h3>
+        <div className="flex-1 overflow-y-auto">
+          {items.length === 0 ? (
+            <p className="px-4 py-5 text-center text-sm text-muted-fg">
+              Nothing on this day.
+            </p>
+          ) : (
+            <ul className="divide-y divide-line">
+              {items.map((item) => {
+                const key = `${item.kind}-${item.row.id}`;
+                const spotlight = {
+                  id: `cal-${key}`,
+                  highlighted: key === openKey,
+                };
+                switch (item.kind) {
+                  case "shoot":
+                    return (
+                      <ShootItem
+                        key={key}
+                        {...spotlight}
+                        shoot={item.row}
+                        members={members}
+                        clock="time"
+                      />
+                    );
+                  case "post":
+                    return (
+                      <PostItem
+                        key={key}
+                        {...spotlight}
+                        post={item.row}
+                        shootOptions={shootOptions}
+                        clock="time"
+                      />
+                    );
+                  case "task":
+                    return (
+                      <TaskItem
+                        key={key}
+                        {...spotlight}
+                        task={item.row}
+                        members={members}
+                      />
+                    );
+                }
+              })}
+            </ul>
+          )}
+          {composing === null ? (
+            <div className="ro:hidden flex flex-wrap items-center gap-1.5 border-t border-line bg-canvas/50 px-3 py-2">
+              {(Object.keys(ADD_LABEL) as CalItem["kind"][]).map((kind) => (
+                <button
+                  key={kind}
+                  type="button"
+                  onClick={() => open(kind)}
+                  className={addBtn}
+                >
+                  <PlusIcon className="h-3.5 w-3.5" />
+                  {ADD_LABEL[kind]}
+                </button>
+              ))}
+            </div>
+          ) : (
+            <div className="border-t border-line bg-canvas/50 px-4 py-3">
+              <p className="mb-2.5 text-[11px] font-semibold uppercase tracking-wide text-muted-fg">
+                {ADD_LABEL[composing]} · {dateLabel}
+              </p>
+              {composing === "shoot" && (
+                <ShootForm
+                  members={members}
+                  defaultDate={ymd}
+                  submitLabel="Add to calendar"
+                  pending={pending}
+                  error={error}
+                  onCancel={close}
+                  onSubmit={(v) => run(() => planShoot(v), close)}
+                />
+              )}
+              {composing === "post" && (
+                <PostForm
+                  shootOptions={shootOptions}
+                  defaultDate={ymd}
+                  submitLabel="Add to calendar"
+                  pending={pending}
+                  error={error}
+                  onCancel={close}
+                  onSubmit={(v) => run(() => schedulePost(v), close)}
+                />
+              )}
+              {composing === "task" && (
+                <TaskForm
+                  members={members}
+                  defaultDue={ymd}
+                  submitLabel="Hand it over"
+                  pending={pending}
+                  error={error}
+                  onCancel={close}
+                  onSubmit={(v) => run(() => delegateTask(v), close)}
+                />
+              )}
+            </div>
+          )}
         </div>
-      ) : (
-        <div className="border-t border-line bg-canvas/50 px-4 py-3">
-          <p className="mb-2.5 text-[11px] font-semibold uppercase tracking-wide text-muted-fg">
-            {ADD_LABEL[composing]} · {dateLabel}
-          </p>
-          {composing === "shoot" && (
-            <ShootForm
-              members={members}
-              defaultDate={ymd}
-              submitLabel="Add to calendar"
-              pending={pending}
-              error={error}
-              onCancel={close}
-              onSubmit={(v) => run(() => planShoot(v), close)}
-            />
-          )}
-          {composing === "post" && (
-            <PostForm
-              shootOptions={shootOptions}
-              defaultDate={ymd}
-              submitLabel="Add to calendar"
-              pending={pending}
-              error={error}
-              onCancel={close}
-              onSubmit={(v) => run(() => schedulePost(v), close)}
-            />
-          )}
-          {composing === "task" && (
-            <TaskForm
-              members={members}
-              defaultDue={ymd}
-              submitLabel="Hand it over"
-              pending={pending}
-              error={error}
-              onCancel={close}
-              onSubmit={(v) => run(() => delegateTask(v), close)}
-            />
-          )}
-        </div>
-      )}
-    </div>
+      </aside>
+    </>
   );
 }
 
@@ -319,13 +356,15 @@ export function CalendarPanel({
   shootOptions: ShootOption[];
 }) {
   const [month, setMonth] = useState(todayYmd.slice(0, 7));
-  const [selected, setSelected] = useState(todayYmd);
-  /** The chip last clicked — its row is spotlighted in the day card. */
+  /** The day whose drawer is open, if any. */
+  const [selected, setSelected] = useState<string | null>(null);
+  /** The chip last clicked: its row is spotlighted in the drawer. */
   const [openKey, setOpenKey] = useState<string | null>(null);
   const select = (ymd: string, key: string | null = null) => {
     setSelected(ymd);
     setOpenKey(key);
   };
+  const closeDay = useCallback(() => setSelected(null), []);
 
   const itemsByDay = useMemo(() => {
     const map = new Map<string, CalItem[]>();
@@ -343,7 +382,6 @@ export function CalendarPanel({
 
   const weeks = useMemo(() => monthWeeks(month), [month]);
   const onThisMonth = month === todayYmd.slice(0, 7);
-  const selectedItems = itemsByDay.get(selected) ?? [];
 
   return (
     <section id="calendar" className="scroll-mt-6">
@@ -352,15 +390,18 @@ export function CalendarPanel({
         hint="The whole department's month at a glance — shoots, posts and task deadlines together."
       />
 
-      <DayAgenda
-        key={selected}
-        items={selectedItems}
-        ymd={selected}
-        todayYmd={todayYmd}
-        members={members}
-        shootOptions={shootOptions}
-        openKey={openKey}
-      />
+      {selected && (
+        <DayAgenda
+          key={selected}
+          items={itemsByDay.get(selected) ?? []}
+          ymd={selected}
+          todayYmd={todayYmd}
+          members={members}
+          shootOptions={shootOptions}
+          openKey={openKey}
+          onClose={closeDay}
+        />
+      )}
 
       <div className="mb-2 flex items-center gap-1 px-1">
         <button
@@ -385,10 +426,7 @@ export function CalendarPanel({
         {!onThisMonth && (
           <button
             type="button"
-            onClick={() => {
-              setMonth(todayYmd.slice(0, 7));
-              select(todayYmd);
-            }}
+            onClick={() => setMonth(todayYmd.slice(0, 7))}
             className={`${secondaryBtn} ms-1`}
           >
             Today
