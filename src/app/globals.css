@@ -191,14 +191,6 @@ body {
     opacity: 0;
   }
 }
-/* A side drawer sliding in from the right edge. */
-@utility drawer-in {
-  transition: transform 220ms var(--ease-out-strong);
-  @starting-style {
-    transform: translateX(100%);
-  }
-}
-
 /* Inline content that just got revealed (expanded rows, inline forms). */
 @utility rise-in {
   transition:

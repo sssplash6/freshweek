@@ -275,7 +275,7 @@ export default async function MarketingPage() {
   return (
     <div
       data-readonly={viewOnly ? "" : undefined}
-      className="mx-auto w-full max-w-5xl flex-1 px-4 py-8"
+      className="mx-auto w-full max-w-6xl flex-1 px-4 py-8"
     >
       <header className="mb-6 flex items-start justify-between gap-4">
         <div className="min-w-0">
