@@ -816,8 +816,8 @@ export default async function AdminPage({
                 count={lateWeeks.length}
               >
                 <p className="mb-3 text-xs text-muted-fg">
-                  Weeks closed and re-opened after the Sunday 12:00 (Tashkent)
-                  deadline.
+                  Weeks closed and re-opened after the Sunday deadline (17:00
+                  Tashkent, 12:00 before 2026-10-11).
                 </p>
                 {lateWeeks.length === 0 ? (
                   <p className="text-sm text-muted-fg">No late submissions. 🎉</p>

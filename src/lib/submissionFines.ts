@@ -1,14 +1,14 @@
 // Proactive late-submission fining. Instead of only fining people when they
 // eventually submit late (which let no-shows escape entirely), this reconciles
 // the current weekly cycle and fines anyone who missed the deadline:
-//   • after Sunday 12:00 (Tashkent) — $20 for goals not yet submitted
+//   • after Sunday 17:00 (Tashkent) — $20 for goals not yet submitted
 //   • after the Monday meeting     — escalate an unpaid $20 to $40
 // It's idempotent (at most one late-submission fine per person per cycle) so it
 // can safely run on any page load or a cron ping. People who submitted on time
 // are never fined; people who submitted late keep the $20 they earned.
 //
 // The Sunday deadline is read on the person's own clock where they keep one
-// (lib/submissionClock.ts): "noon on Sunday" means noon where they live, so the
+// (lib/submissionClock.ts): "17:00 on Sunday" means 17:00 where they live, so the
 // sweep runs once per clock over non-overlapping sets of people. The Monday
 // meeting escalation does NOT move — it's one meeting at one instant for
 // everyone (10:00 Tashkent, and 11:00 for weeks before lib/meetings.ts's
@@ -36,6 +36,7 @@ import {
   SUBMISSION_DEADLINE_EPOCH,
   TRIP_SHIFTED_DEADLINE_FROM,
   TRIP_SHIFTED_DEADLINE_TO,
+  submissionHourForMonday,
   weekSubmissionDeadline,
 } from "@/lib/lateness";
 import {
@@ -49,7 +50,10 @@ import {
   submissionExemptEmails,
 } from "@/lib/submissionExempt";
 
-const LATE_NOTE = "Goals not submitted by the Sunday 12:00 deadline";
+// Cites the hour the cycle was judged at (12:00 before SUBMISSION_5PM_FROM_MONDAY).
+function lateNote(deadlineHour: number): string {
+  return `Goals not submitted by the Sunday ${deadlineHour}:00 deadline`;
+}
 /**
  * The steeper note names the meeting hour it was judged against, rather than
  * a fixed 11:00, because the meeting moved to 10:00 from 2026-09-14 (see
@@ -135,6 +139,7 @@ async function reconcileClock(
   // everything below. Same source the deadline itself comes from, so a fine
   // can never cite an hour it wasn't measured against.
   const meetingHour = meetingHourForMonday(toYmd(cycle.weekStart));
+  const deadlineHour = submissionHourForMonday(toYmd(cycle.weekStart));
 
   const users = await prisma.user.findMany({
     where: {
@@ -246,7 +251,7 @@ async function reconcileClock(
       ? missedNote(meetingHour)
       : shiftedWeek
         ? LATE_NOTE_TRIP
-        : LATE_NOTE;
+        : lateNote(deadlineHour);
 
     if (!existing) {
       await prisma.$transaction(async (tx) => {
@@ -270,7 +275,7 @@ async function reconcileClock(
           "FINE",
           missed
             ? `You were fined ${formatMoney(amount)} for not submitting your goals by the Monday ${meetingHour}:00 meeting.`
-            : `You were fined ${formatMoney(amount)} for not submitting your goals by the Sunday ${shiftedWeek ? "midnight" : "12:00"} deadline.`,
+            : `You were fined ${formatMoney(amount)} for not submitting your goals by the Sunday ${shiftedWeek ? "midnight" : `${deadlineHour}:00`} deadline.`,
         );
       });
     } else if (existing.paidAt == null && existing.amount < amount) {

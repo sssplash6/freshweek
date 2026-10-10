@@ -1,9 +1,9 @@
 // Which clock a person's weekly submission deadline is read on.
 //
-// The rule is "goals in by noon on Sunday". For almost everyone that's noon in
+// The rule is "goals in by 17:00 on Sunday". For almost everyone that's 17:00 in
 // Tashkent, where the company runs. Someone reporting from elsewhere is judged
 // on the clock they actually live by: malika@freshman.academy is at GMT+8, so
-// her Sunday noon lands at 04:00 UTC — three hours before the team's.
+// her Sunday 17:00 lands at 09:00 UTC — three hours before the team's.
 //
 // SUBMISSION ONLY. The Monday meeting is one event the whole team joins
 // at a single instant, so the $40 "missed the meeting" tier stays on the
