@@ -24,6 +24,12 @@ services:
       # Auth.js session secret — Render generates a strong random value.
       - key: AUTH_SECRET
         generateValue: true
+      # Pins the key Next.js salts Server Action IDs with. Without it every
+      # build rolls a fresh key, so a tab opened before a deploy fails its next
+      # save with "Server Action ... was not found on the server". Render's
+      # generated value (base64, 256-bit) is a valid AES key for it.
+      - key: NEXT_SERVER_ACTIONS_ENCRYPTION_KEY
+        generateValue: true
       - key: AUTH_TRUST_HOST
         value: "true"
       # Public URL Auth.js uses to build OAuth callback + redirect URLs. Without
