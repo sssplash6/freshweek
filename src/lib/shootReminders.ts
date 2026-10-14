@@ -1,6 +1,5 @@
 // Server-only: the "a shoot is coming" nudge. The lazy no-cron pattern of
-// reconcileDailyReportReminders (lib/dailyReportFines.ts) and the payroll
-// reminder: no scheduled job exists, so the sweep runs on page loads — the
+// the payroll reminder: no scheduled job exists, so the sweep runs on page loads — the
 // /marketing page and, for marketing members, the dashboard — and each shoot
 // claims its reminder with `reminderSentAt`, an atomic update that makes a
 // lost race between two loads send it once at most.

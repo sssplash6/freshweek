@@ -21,12 +21,6 @@ export const LATE_SUBMISSION_PENALTY = 20;
  * i.e. the person was flagged "not submitted" there and submitted even later. */
 export const MISSED_SUBMISSION_PENALTY = 40;
 
-/** Fine when a daily report misses its 5 AM (next-morning, Tashkent) deadline. */
-export const LATE_DAILY_REPORT_PENALTY = 5;
-
-/** Escalated fine when the report still isn't in by 3 PM that same day. */
-export const MISSED_DAILY_REPORT_PENALTY = 10;
-
 /** Pre-filled amount for a manual (admin-issued) fine. */
 export const DEFAULT_MANUAL_PENALTY = 20;
 

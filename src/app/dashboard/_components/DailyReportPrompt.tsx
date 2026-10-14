@@ -4,7 +4,7 @@ import { PenIcon, ChevronIcon } from "./icons";
 /**
  * The reporter's way into /daily-reports from the dashboard (which hides the
  * site nav): one quiet row stating where today stands — unsent and due,
- * already sent, or a free weekend.
+ * already sent, or optional.
  */
 export function DailyReportPrompt({
   sentTimeLabel,
@@ -45,7 +45,7 @@ export function DailyReportPrompt({
               <span className="text-muted-fg"> · edit anytime</span>
             </>
           ) : optionalDay ? (
-            <span className="text-muted-fg">Weekend — optional</span>
+            <span className="text-muted-fg">Optional</span>
           ) : (
             <span className="text-muted-fg">Not sent yet — due by 5 AM</span>
           )}

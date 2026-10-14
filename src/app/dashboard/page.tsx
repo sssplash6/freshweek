@@ -41,10 +41,6 @@ import { submissionOffsetHours } from "@/lib/submissionClock";
 import { submitsAtBottom } from "@/lib/submitPlacement";
 import { reconcileSubmissionFines } from "@/lib/submissionFines";
 import {
-  reconcileDailyReportFines,
-  reconcileDailyReportReminders,
-} from "@/lib/dailyReportFines";
-import {
   reconcilePayrollReminders,
   submissionNeedingPaymentDetails,
 } from "@/lib/payroll";
@@ -206,12 +202,6 @@ export default async function DashboardPage({
   // the same lazy no-cron pattern; claims once per period, so this is a cheap
   // read on every load after that. Best-effort like the sweep above.
   await reconcilePayrollReminders().catch(() => {});
-
-  // Same treatment for daily reports: fine this person's missed 5 AM
-  // deadlines, and fire the 21:00 "not sent yet" nudge for the whole roster
-  // once its slot has passed (claimed once per day).
-  await reconcileDailyReportFines({ userId }).catch(() => {});
-  await reconcileDailyReportReminders().catch(() => {});
 
   // Same lazy no-cron treatment for the marketing content plan: for a
   // department member (or an admin), fire the coming-up nudge for every

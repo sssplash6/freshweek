@@ -5,9 +5,8 @@
 //
 // A report belongs to a Tashkent calendar day, stored at UTC midnight (the
 // goal-deadline date-only convention). It is due by 5 AM the NEXT Tashkent
-// morning (moved from midnight on 2026-08-19, when fines arrived: $5 past
-// 5 AM, $10 if still not in by 3 PM — see lib/dailyReportFines.ts). Monday to
-// Friday are expected; weekend reports are welcome but never owed.
+// morning. Until 2026-10-14 Monday to Friday were owed and fined; from then
+// on every day is optional and nothing is ever fined.
 
 import { fromYmd, toYmd, COMPANY_TIME_ZONE } from "@/lib/dates";
 
@@ -19,8 +18,8 @@ export const MAX_DAILY_REPORT = 5000;
 /** Nothing before this day is owed — the feature shipped here. */
 export const DAILY_REPORTS_EPOCH = fromYmd("2026-08-17");
 
-/** No day before this one is ever fined — the fine rule started here. */
-export const DAILY_REPORT_FINES_EPOCH = fromYmd("2026-08-19");
+/** From this day on reports are optional: never owed, late or missed. */
+export const DAILY_REPORTS_OPTIONAL_FROM = fromYmd("2026-10-14");
 
 /** Today's Tashkent calendar day as "YYYY-MM-DD". */
 export function tashkentTodayYmd(now: Date = new Date()): string {
@@ -47,10 +46,10 @@ export function dayEscalationDeadline(day: Date): Date {
   );
 }
 
-/** Whether a report is owed for this day at all (Monday–Friday). */
+/** Whether a report was owed for this day (Monday–Friday, before reports went optional). */
 export function isRequiredDay(day: Date): boolean {
   const wd = day.getUTCDay();
-  return wd >= 1 && wd <= 5;
+  return wd >= 1 && wd <= 5 && day.getTime() < DAILY_REPORTS_OPTIONAL_FROM.getTime();
 }
 
 // sent     — submitted by 5 AM the next morning
@@ -59,7 +58,7 @@ export function isRequiredDay(day: Date): boolean {
 //            before its 5 AM cutoff)
 // upcoming — a future day (nothing owed yet)
 // missed   — a required weekday whose deadline passed with no report
-// skipped  — a weekend (or pre-launch day) with no report: never owed
+// skipped: an optional day (weekend, pre-launch, or from 2026-10-14) with no report
 export type DailyReportStatus =
   | "sent"
   | "late"
@@ -74,7 +73,8 @@ export function reportStatus(
   now: Date = new Date(),
 ): DailyReportStatus {
   if (submittedAt) {
-    return submittedAt.getTime() <= dayDeadline(day).getTime()
+    return !isRequiredDay(day) ||
+      submittedAt.getTime() <= dayDeadline(day).getTime()
       ? "sent"
       : "late";
   }
@@ -102,7 +102,7 @@ export const DAILY_REPORT_STATUS: Record<
   pending: { label: "Due by 5 AM", dot: "border-[1.5px] border-muted-fg" },
   upcoming: { label: "Upcoming", dot: "bg-line" },
   missed: { label: "Not sent", dot: "bg-chart-bad" },
-  skipped: { label: "Weekend", dot: "bg-chart-mute" },
+  skipped: { label: "No report", dot: "bg-chart-mute" },
 };
 
 const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];

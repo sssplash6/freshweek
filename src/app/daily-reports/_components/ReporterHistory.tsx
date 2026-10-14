@@ -7,7 +7,7 @@ export type HistoryRow = {
   ymd: string;
   label: string; // "Fri, 15 Aug"
   dotClass: string;
-  statusLabel: string; // "Sent" / "Sent late" / "Not sent" / "Weekend"
+  statusLabel: string; // "Sent" / "Sent late" / "Not sent" / "No report"
   missed: boolean;
   timeLabel: string | null; // "02:15 PM" when sent
   content: string;
