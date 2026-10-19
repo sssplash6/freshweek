@@ -7,13 +7,11 @@
 
 // Adding someone mid-stream? Give them a DAILY_REPORTER_SINCE entry below so
 // the fine sweep doesn't back-fine days from before they owed anything.
+// The roster since 2026-10-19 (the earlier one was dropped when reports came
+// back from their optional spell).
 const BUILT_IN_REPORTERS = [
-  "sanjar@freshman.academy",
-  "sega@freshman.academy",
-  "classes@freshman.academy",
-  "khusanboy@freshman.academy",
-  "shakhzod@freshman.academy",
-  "shokhrukh@freshman.academy",
+  "behruz.edu@gmail.com",
+  "rustam.ganijonov@freshman.academy",
 ];
 
 const BUILT_IN_RECIPIENT = "valera@freshman.academy";
@@ -40,9 +38,7 @@ export function isDailyReporter(email: string | null | undefined): boolean {
 // day the rule started, lib/dailyReportTypes.ts) — anyone who joins the list
 // later gets an entry here so the sweep's lookback can't reach days from
 // before they owed reports.
-const DAILY_REPORTER_SINCE: Record<string, string> = {
-  "shokhrukh@freshman.academy": "2026-10-05",
-};
+const DAILY_REPORTER_SINCE: Record<string, string> = {};
 
 /** The first Tashkent day (YMD) this reporter's fines can apply to. */
 export function dailyReporterSinceYmd(
@@ -63,12 +59,8 @@ export function dailyReportRecipient(): string {
 // derived from the name string — report surfaces show these instead.
 // Env-added reporters fall back to the first word of their profile name.
 const REPORTER_FIRST_NAMES: Record<string, string> = {
-  "sanjar@freshman.academy": "Sanjar",
-  "sega@freshman.academy": "Sega",
-  "classes@freshman.academy": "Shokhrukh",
-  "khusanboy@freshman.academy": "Khusanboy",
-  "shakhzod@freshman.academy": "Shakhzod",
-  "shokhrukh@freshman.academy": "Shokhrukh",
+  "behruz.edu@gmail.com": "Behruz",
+  "rustam.ganijonov@freshman.academy": "Rustam",
 };
 
 /** The name daily-report surfaces call this person by. */

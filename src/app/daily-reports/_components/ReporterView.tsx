@@ -107,8 +107,9 @@ export async function ReporterView({
         <div>
           <h1 className="mt-1 text-2xl font-bold text-ink">Daily reports</h1>
           <p className="mt-1 text-sm text-muted-fg">
-            A few lines on your day, whenever you have something to share.
-            Optional, no fines. Goes straight to Valera.
+            A few lines on your day, Monday to Friday — due by 5 AM the next
+            morning ($5 fine after that, $10 past 3 PM). Goes straight to
+            Valera.
           </p>
         </div>
         <div className="flex shrink-0 items-center gap-2">
@@ -134,7 +135,7 @@ export async function ReporterView({
               {dayLabel(yesterdayYmd)}
             </h2>
             <p className="mt-0.5 text-sm text-muted-fg">
-              Not sent yet, due by 5 AM.
+              Not sent yet — you have until 5 AM before the $5 fine lands.
             </p>
           </div>
           <ReportEditor
@@ -174,7 +175,7 @@ export async function ReporterView({
                 <span className="text-muted-fg">Due by 5 AM tomorrow.</span>
               ) : (
                 <span className="text-muted-fg">
-                  Optional, but welcome.
+                  Weekend — optional, but welcome.
                 </span>
               )}
             </p>

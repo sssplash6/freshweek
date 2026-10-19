@@ -12,6 +12,7 @@ import { getWeekBounds } from "@/lib/weeks";
 import { currentMeetingSlot } from "@/lib/meetings";
 import { currentSubmissionCycle } from "@/lib/lateness";
 import { reconcileSubmissionFines } from "@/lib/submissionFines";
+import { reconcileDailyReportFines } from "@/lib/dailyReportFines";
 import {
   formatDateTimeTz,
   formatStamp,
@@ -84,6 +85,9 @@ export default async function AdminPage({
   // admin view (and everyone's fines) reflect the deadline the moment it's
   // opened. Idempotent and best-effort.
   await reconcileSubmissionFines().catch(() => {});
+
+  // Daily-report fines get the same whole-roster sweep on admin loads.
+  await reconcileDailyReportFines().catch(() => {});
 
   const tabParam = (await searchParams).tab;
   const tab: AdminTab =

@@ -3,6 +3,10 @@ import { redirect } from "next/navigation";
 import { auth } from "@/auth";
 import { assertApproved } from "@/lib/approval";
 import { isDailyReporter, isDailyReportRecipient } from "@/lib/dailyReports";
+import {
+  reconcileDailyReportFines,
+  reconcileDailyReportReminders,
+} from "@/lib/dailyReportFines";
 import { ReporterView } from "./_components/ReporterView";
 import { ReviewView } from "./_components/ReviewView";
 
@@ -27,6 +31,12 @@ export default async function DailyReportsPage({
   // window into them.
   const recipient = isDailyReportRecipient(email);
   const sp = await searchParams;
+
+  // Bring the roster's daily fines up to date (and fire the 21:00 nudge if
+  // its slot has passed) so both the composer's week strip and the review
+  // calendar reflect the deadline the moment the page opens. Best-effort.
+  await reconcileDailyReportFines().catch(() => {});
+  await reconcileDailyReportReminders().catch(() => {});
 
   // A recipient who also reports lands on their composer; the team view stays
   // one click away (?view=review) and any calendar navigation (?m/?d) keeps

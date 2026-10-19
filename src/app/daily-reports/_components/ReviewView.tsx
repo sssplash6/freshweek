@@ -122,7 +122,8 @@ export async function ReviewView({
         <div>
           <h1 className="mt-1 text-2xl font-bold text-ink">Daily reports</h1>
           <p className="mt-1 text-sm text-muted-fg">
-            Optional notes from each reporter. Pick a day to read that day&rsquo;s reports.
+            A few lines from each reporter every weekday, due by 5 AM the next
+            morning. Pick a day to read that day&rsquo;s reports.
           </p>
         </div>
         <div className="shrink-0">

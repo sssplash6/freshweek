@@ -5,8 +5,11 @@
 //
 // A report belongs to a Tashkent calendar day, stored at UTC midnight (the
 // goal-deadline date-only convention). It is due by 5 AM the NEXT Tashkent
-// morning. Until 2026-10-14 Monday to Friday were owed and fined; from then
-// on every day is optional and nothing is ever fined.
+// morning (moved from midnight on 2026-08-19, when fines arrived: $5 past
+// 5 AM, $10 if still not in by 3 PM — see lib/dailyReportFines.ts). Monday to
+// Friday are expected; weekend reports are welcome but never owed. Reports were
+// optional for everyone from 2026-10-14 and came back on 2026-10-19 for a new
+// roster (lib/dailyReports.ts), so no day before that counts.
 
 import { fromYmd, toYmd, COMPANY_TIME_ZONE } from "@/lib/dates";
 
@@ -18,8 +21,11 @@ export const MAX_DAILY_REPORT = 5000;
 /** Nothing before this day is owed — the feature shipped here. */
 export const DAILY_REPORTS_EPOCH = fromYmd("2026-08-17");
 
-/** From this day on reports are optional: never owed, late or missed. */
-export const DAILY_REPORTS_OPTIONAL_FROM = fromYmd("2026-10-14");
+/**
+ * No day before this one is owed or fined: the current roster started here.
+ * Earlier days belong to the previous roster, which no surface shows any more.
+ */
+export const DAILY_REPORTS_REQUIRED_FROM = fromYmd("2026-10-19");
 
 /** Today's Tashkent calendar day as "YYYY-MM-DD". */
 export function tashkentTodayYmd(now: Date = new Date()): string {
@@ -46,10 +52,15 @@ export function dayEscalationDeadline(day: Date): Date {
   );
 }
 
-/** Whether a report was owed for this day (Monday–Friday, before reports went optional). */
+/** Whether a report is owed for this day at all (Monday to Friday, from the required-from day). */
+// ponytail: one start day for the whole roster. A reporter added later shows
+// "Not sent" for weekdays before they joined; pass dailyReporterSinceYmd in here
+// if that starts to matter.
 export function isRequiredDay(day: Date): boolean {
   const wd = day.getUTCDay();
-  return wd >= 1 && wd <= 5 && day.getTime() < DAILY_REPORTS_OPTIONAL_FROM.getTime();
+  return (
+    wd >= 1 && wd <= 5 && day.getTime() >= DAILY_REPORTS_REQUIRED_FROM.getTime()
+  );
 }
 
 // sent     — submitted by 5 AM the next morning
@@ -58,7 +69,7 @@ export function isRequiredDay(day: Date): boolean {
 //            before its 5 AM cutoff)
 // upcoming — a future day (nothing owed yet)
 // missed   — a required weekday whose deadline passed with no report
-// skipped: an optional day (weekend, pre-launch, or from 2026-10-14) with no report
+// skipped: a day that isn't owed (weekend, or before 2026-10-19) with no report
 export type DailyReportStatus =
   | "sent"
   | "late"
@@ -83,9 +94,7 @@ export function reportStatus(
     // days at once: yesterday (until 5 AM) and today. Both read as pending.
     return toYmd(day) <= tashkentTodayYmd(now) ? "pending" : "upcoming";
   }
-  return isRequiredDay(day) && day.getTime() >= DAILY_REPORTS_EPOCH.getTime()
-    ? "missed"
-    : "skipped";
+  return isRequiredDay(day) ? "missed" : "skipped";
 }
 
 /**
