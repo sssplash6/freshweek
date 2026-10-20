@@ -14,7 +14,6 @@ import {
   MAX_LOCATION,
   MAX_POST_CAPTION,
   MAX_POST_TITLE,
-  MAX_SHOOT_NOTE,
   MAX_SHOOT_TITLE,
   MAX_TASK_NOTE,
   MAX_TASK_TITLE,
@@ -139,7 +138,8 @@ export async function planShoot(input: ShootInput): Promise<ActionResult> {
     const location = cleanText(input.location, MAX_LOCATION, "Location");
     const shootAt = cleanWhen(input.date, input.time, "The shoot");
     const assigneeId = await cleanAssignee(input.assigneeId);
-    const note = cleanOptional(input.note, MAX_SHOOT_NOTE, "Notes");
+    // No cap on the brief: the 16mb Server Action body limit is the only ceiling.
+    const note = cleanOptional(input.note, Infinity, "Notes");
 
     await prisma.$transaction(async (tx) => {
       await tx.contentShoot.create({
@@ -184,7 +184,8 @@ export async function updateShoot(
     const location = cleanText(input.location, MAX_LOCATION, "Location");
     const shootAt = cleanWhen(input.date, input.time, "The shoot");
     const assigneeId = await cleanAssignee(input.assigneeId, shoot.assigneeId);
-    const note = cleanOptional(input.note, MAX_SHOOT_NOTE, "Notes");
+    // No cap on the brief: the 16mb Server Action body limit is the only ceiling.
+    const note = cleanOptional(input.note, Infinity, "Notes");
 
     const moved = shootAt.getTime() !== shoot.shootAt.getTime();
     const relocated = location !== shoot.location;

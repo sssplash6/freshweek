@@ -9,7 +9,6 @@ import {
 import {
   MAX_LINK,
   MAX_LOCATION,
-  MAX_SHOOT_NOTE,
   MAX_SHOOT_TITLE,
   SHOOT_STATE,
   type ShootState,
@@ -180,7 +179,6 @@ export function ShootForm({
           value={note}
           onChange={(e) => setNote(e.target.value)}
           placeholder="Shot list, who to bring, what to wear…"
-          maxLength={MAX_SHOOT_NOTE}
           rows={2}
           className={`${inputCls} resize-y`}
         />

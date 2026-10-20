@@ -14,7 +14,6 @@ export const MARKETING_DEPARTMENT = "Marketing";
 // that a paste of a whole doc can't land in a list row.
 export const MAX_SHOOT_TITLE = 120;
 export const MAX_LOCATION = 120;
-export const MAX_SHOOT_NOTE = 1000;
 export const MAX_POST_TITLE = 200;
 // Instagram's own caption cap — the longest any channel here accepts.
 export const MAX_POST_CAPTION = 2200;
