@@ -652,6 +652,10 @@ model GoalShare {
 // assigned shoot inside its reminder window first writes it, so racing loads
 // can't send the nudge twice.
 //
+// `program` (on shoots, posts and tasks alike) is which academy program the
+// work is for, so the calendar can filter by it. Values are the PROGRAMS in
+// lib/marketing.ts, validated there like `platforms`; null = not tagged.
+//
 // The plan belongs to the department, not the person: every actor link is
 // SetNull so a seat leaving marketing doesn't erase the calendar they built.
 model ContentShoot {
@@ -661,6 +665,7 @@ model ContentShoot {
   location  String
   assigneeId String?
   note      String?
+  program   String?
 
   reminderSentAt DateTime?
   finishedUrl    String?
@@ -699,6 +704,7 @@ model ContentPost {
   platforms   String[] @default([])
   caption     String?
   postUrl     String?
+  program     String?
   shootId     String?
   publishedAt DateTime?
   createdById String?
@@ -722,6 +728,7 @@ model MarketingTask {
   title       String
   note        String?
   dueOn       DateTime?
+  program     String?
   assigneeId  String
   percent     Int      @default(0)
   completedAt DateTime?

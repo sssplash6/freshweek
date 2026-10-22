@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { formatYmd, parseYmd, toYmd } from "@/lib/dates";
 import { dayLabel } from "@/lib/dailyReportTypes";
-import { addDaysYmd } from "@/lib/marketing";
+import { addDaysYmd, type Program, PROGRAMS } from "@/lib/marketing";
 import { ChevronIcon, PlusIcon } from "../../dashboard/_components/icons";
 import { delegateTask, planShoot, schedulePost } from "../actions";
 import { PostForm, PostItem, type PostRow, type ShootOption } from "./PostsPanel";
@@ -31,6 +31,9 @@ import {
 // work right there, plus the three things you can add on that date, each form
 // opening in the column with the date pre-filled. Clicking a chip goes
 // further: it selects the day AND spotlights that row, scrolling it into view.
+// The program pills above the grid narrow everything (grid, counts, day
+// column) to one program's work, and whatever is added on the day column
+// while a program is picked comes pre-tagged with it.
 
 type CalItem =
   | { kind: "shoot"; row: ShootRow }
@@ -38,6 +41,14 @@ type CalItem =
   | { kind: "task"; row: TaskRow };
 
 const WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+
+/** The calendar's program filter: everything, one program, or the untagged. */
+type ProgramFilter = "all" | "none" | Program;
+const FILTERS: { key: ProgramFilter; label: string }[] = [
+  { key: "all", label: "All" },
+  ...PROGRAMS.map((p) => ({ key: p, label: p })),
+  { key: "none", label: "No program" },
+];
 const MAX_CHIPS = 3;
 
 /** The Monday-first week rows covering a "YYYY-MM" month (prev/next overflow). */
@@ -157,6 +168,7 @@ function DayAgenda({
   members,
   shootOptions,
   openKey,
+  program,
 }: {
   items: CalItem[];
   ymd: string;
@@ -164,6 +176,8 @@ function DayAgenda({
   members: Member[];
   shootOptions: ShootOption[];
   openKey: string | null;
+  /** The active program filter, pre-picked on whatever is added here. */
+  program: string | null;
 }) {
   const [composing, setComposing] = useState<CalItem["kind"] | null>(null);
   const { pending, error, setError, run } = useAction();
@@ -270,6 +284,7 @@ function DayAgenda({
             <ShootForm
               members={members}
               defaultDate={ymd}
+              defaultProgram={program}
               submitLabel="Add to calendar"
               pending={pending}
               error={error}
@@ -281,6 +296,7 @@ function DayAgenda({
             <PostForm
               shootOptions={shootOptions}
               defaultDate={ymd}
+              defaultProgram={program}
               submitLabel="Add to calendar"
               pending={pending}
               error={error}
@@ -292,6 +308,7 @@ function DayAgenda({
             <TaskForm
               members={members}
               defaultDue={ymd}
+              defaultProgram={program}
               submitLabel="Hand it over"
               pending={pending}
               error={error}
@@ -324,6 +341,7 @@ export function CalendarPanel({
   const [selected, setSelected] = useState(todayYmd);
   /** The chip last clicked: its row is spotlighted in the day column. */
   const [openKey, setOpenKey] = useState<string | null>(null);
+  const [filter, setFilter] = useState<ProgramFilter>("all");
   const select = (ymd: string, key: string | null = null) => {
     setSelected(ymd);
     setOpenKey(key);
@@ -336,12 +354,15 @@ export function CalendarPanel({
       arr.push(item);
       map.set(ymd, arr);
     };
-    for (const s of shoots) push(s.dateYmd, { kind: "shoot", row: s });
-    for (const p of posts) push(p.dateYmd, { kind: "post", row: p });
-    for (const t of tasks) if (t.dueYmd) push(t.dueYmd, { kind: "task", row: t });
+    const shows = (program: string | null) =>
+      filter === "all" || (filter === "none" ? !program : program === filter);
+    for (const s of shoots) if (shows(s.program)) push(s.dateYmd, { kind: "shoot", row: s });
+    for (const p of posts) if (shows(p.program)) push(p.dateYmd, { kind: "post", row: p });
+    for (const t of tasks)
+      if (t.dueYmd && shows(t.program)) push(t.dueYmd, { kind: "task", row: t });
     for (const items of map.values()) sortDayItems(items);
     return map;
-  }, [shoots, posts, tasks]);
+  }, [shoots, posts, tasks, filter]);
 
   const weeks = useMemo(() => monthWeeks(month), [month]);
   const onThisMonth = month === todayYmd.slice(0, 7);
@@ -350,7 +371,7 @@ export function CalendarPanel({
     <section id="calendar" className="scroll-mt-6">
       <PanelHeader
         title="Calendar"
-        hint="The whole department's month at a glance — shoots, posts and task deadlines together."
+        hint="The whole department's month at a glance: shoots, posts and task deadlines together. Pick a program to see only its work."
       />
 
       <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_22rem] lg:items-start">
@@ -398,6 +419,34 @@ export function CalendarPanel({
                 </span>
               ))}
             </div>
+          </div>
+
+          <div
+            role="group"
+            aria-label="Filter by program"
+            className="mb-2 flex flex-wrap gap-1.5 px-1"
+          >
+            {FILTERS.map((f) => {
+              const on = filter === f.key;
+              return (
+                <button
+                  key={f.key}
+                  type="button"
+                  onClick={() => {
+                    setFilter(f.key);
+                    setOpenKey(null);
+                  }}
+                  aria-pressed={on}
+                  className={`rounded-full border px-2.5 py-1 text-xs font-medium whitespace-nowrap transition ${
+                    on
+                      ? "border-brand bg-brand-soft text-brand"
+                      : "border-line text-muted-fg hover:border-brand hover:text-ink"
+                  }`}
+                >
+                  {f.label}
+                </button>
+              );
+            })}
           </div>
 
           <div className="overflow-hidden rounded-xl border border-line">
@@ -494,6 +543,7 @@ export function CalendarPanel({
           members={members}
           shootOptions={shootOptions}
           openKey={openKey}
+          program={filter === "all" || filter === "none" ? null : filter}
         />
       </div>
     </section>

@@ -40,6 +40,8 @@ import {
   linkCls,
   PanelHeader,
   primaryBtn,
+  ProgramField,
+  ProgramTag,
   RowClock,
   RowList,
   secondaryBtn,
@@ -60,6 +62,7 @@ export type PostRow = {
   postUrl: string | null;
   shoot: { id: string; title: string; finishedUrl: string | null } | null;
   publishedLabel: string | null;
+  program: string | null;
 };
 
 export type ShootOption = { id: string; label: string };
@@ -71,12 +74,14 @@ type PostValues = {
   platforms: PostPlatform[];
   caption: string | null;
   shootId: string | null;
+  program: string | null;
 };
 
 export function PostForm({
   shootOptions,
   initial,
   defaultDate,
+  defaultProgram,
   submitLabel,
   pending,
   error,
@@ -86,6 +91,8 @@ export function PostForm({
   shootOptions: ShootOption[];
   initial?: PostRow;
   defaultDate: string;
+  /** Pre-picked program for a fresh post: the calendar's active filter. */
+  defaultProgram?: string | null;
   submitLabel: string;
   pending: boolean;
   error: string | null;
@@ -98,6 +105,7 @@ export function PostForm({
   const [platforms, setPlatforms] = useState<PostPlatform[]>(initial?.platforms ?? []);
   const [caption, setCaption] = useState(initial?.caption ?? "");
   const [shootId, setShootId] = useState(initial?.shoot?.id ?? "");
+  const [program, setProgram] = useState(initial?.program ?? defaultProgram ?? "");
   const ready = title.trim() !== "" && date !== "" && time !== "";
 
   // The linked shoot may have aged out of the picker's window — keep it
@@ -123,6 +131,7 @@ export function PostForm({
           platforms,
           caption: caption.trim() || null,
           shootId: shootId || null,
+          program: program || null,
         });
       }}
     >
@@ -183,6 +192,7 @@ export function PostForm({
           })}
         </div>
       </fieldset>
+      <ProgramField value={program} onChange={setProgram} />
       <Field label="From which shoot" optional>
         <select
           value={shootId}
@@ -322,6 +332,7 @@ export function PostItem({
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
             <span className="break-words text-sm font-semibold text-ink">{post.title}</span>
+            <ProgramTag program={post.program} />
             {post.state !== "scheduled" && <StatePill {...POST_STATE[post.state]} />}
           </div>
           <div className="mt-1 flex flex-wrap items-center gap-1">

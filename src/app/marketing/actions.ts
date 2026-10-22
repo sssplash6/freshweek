@@ -10,6 +10,7 @@ import { formatDateTimeTz, parseYmd } from "@/lib/dates";
 import {
   isHttpUrl,
   isPostPlatform,
+  isProgram,
   MAX_LINK,
   MAX_LOCATION,
   MAX_POST_CAPTION,
@@ -89,6 +90,12 @@ function cleanPlatforms(values: string[] | null | undefined): string[] {
   return POST_PLATFORMS.filter((p) => list.includes(p));
 }
 
+function cleanProgram(value: string | null | undefined): string | null {
+  if (!value) return null;
+  if (!isProgram(value)) throw new ActionError("That program isn't on the list.");
+  return value;
+}
+
 /**
  * An assignee must be a current member of the marketing department — except
  * the person the row is already assigned to, who may have left since: saving
@@ -129,6 +136,7 @@ type ShootInput = {
   location: string;
   assigneeId: string | null;
   note?: string | null;
+  program?: string | null;
 };
 
 export async function planShoot(input: ShootInput): Promise<ActionResult> {
@@ -140,10 +148,11 @@ export async function planShoot(input: ShootInput): Promise<ActionResult> {
     const assigneeId = await cleanAssignee(input.assigneeId);
     // No cap on the brief: the 16mb Server Action body limit is the only ceiling.
     const note = cleanOptional(input.note, Infinity, "Notes");
+    const program = cleanProgram(input.program);
 
     await prisma.$transaction(async (tx) => {
       await tx.contentShoot.create({
-        data: { title, shootAt, location, assigneeId, note, createdById: actor.id },
+        data: { title, shootAt, location, assigneeId, note, program, createdById: actor.id },
       });
       const to = othersThan(actor.id, assigneeId);
       if (to.length > 0) {
@@ -186,6 +195,7 @@ export async function updateShoot(
     const assigneeId = await cleanAssignee(input.assigneeId, shoot.assigneeId);
     // No cap on the brief: the 16mb Server Action body limit is the only ceiling.
     const note = cleanOptional(input.note, Infinity, "Notes");
+    const program = cleanProgram(input.program);
 
     const moved = shootAt.getTime() !== shoot.shootAt.getTime();
     const relocated = location !== shoot.location;
@@ -201,6 +211,7 @@ export async function updateShoot(
           location,
           assigneeId,
           note,
+          program,
           // A new time or a new creator is a new reminder: the old claim was
           // for a slot (or a person) that no longer applies.
           ...(moved || reassigned ? { reminderSentAt: null } : {}),
@@ -327,6 +338,7 @@ type PostInput = {
   platforms: string[];
   caption?: string | null;
   shootId?: string | null;
+  program?: string | null;
 };
 
 async function cleanPost(input: PostInput) {
@@ -334,6 +346,7 @@ async function cleanPost(input: PostInput) {
   const publishAt = cleanWhen(input.date, input.time, "The post");
   const platforms = cleanPlatforms(input.platforms);
   const caption = cleanOptional(input.caption, MAX_POST_CAPTION, "Caption");
+  const program = cleanProgram(input.program);
   const shootId = input.shootId || null;
   if (shootId) {
     const shoot = await prisma.contentShoot.findUnique({
@@ -342,7 +355,7 @@ async function cleanPost(input: PostInput) {
     });
     if (!shoot) throw new ActionError("That shoot was removed — pick another or none.");
   }
-  return { title, publishAt, platforms, caption, shootId };
+  return { title, publishAt, platforms, caption, program, shootId };
 }
 
 export async function schedulePost(input: PostInput): Promise<ActionResult> {
@@ -422,6 +435,7 @@ type TaskInput = {
   note?: string | null;
   dueOn?: string | null;
   assigneeId: string;
+  program?: string | null;
 };
 
 type TaskPair = { createdById: string | null; assigneeId: string };
@@ -448,11 +462,12 @@ export async function delegateTask(input: TaskInput): Promise<ActionResult> {
     const title = cleanText(input.title, MAX_TASK_TITLE, "Title");
     const note = cleanOptional(input.note, MAX_TASK_NOTE, "Note");
     const dueOn = cleanDue(input.dueOn);
+    const program = cleanProgram(input.program);
     const assigneeId = await requireAssignee(input.assigneeId);
 
     await prisma.$transaction(async (tx) => {
       await tx.marketingTask.create({
-        data: { title, note, dueOn, assigneeId, createdById: actor.id },
+        data: { title, note, dueOn, program, assigneeId, createdById: actor.id },
       });
       const to = othersThan(actor.id, assigneeId);
       if (to.length > 0) {
@@ -479,13 +494,14 @@ export async function updateTask(
     const title = cleanText(input.title, MAX_TASK_TITLE, "Title");
     const note = cleanOptional(input.note, MAX_TASK_NOTE, "Note");
     const dueOn = cleanDue(input.dueOn);
+    const program = cleanProgram(input.program);
     const assigneeId = await requireAssignee(input.assigneeId, task.assigneeId);
     const reassigned = assigneeId !== task.assigneeId;
 
     await prisma.$transaction(async (tx) => {
       await tx.marketingTask.update({
         where: { id: taskId },
-        data: { title, note, dueOn, assigneeId },
+        data: { title, note, dueOn, program, assigneeId },
       });
       const to = othersThan(actor.id, assigneeId);
       if (to.length > 0) {

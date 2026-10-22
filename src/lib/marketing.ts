@@ -155,6 +155,18 @@ export function isPostPlatform(v: string): v is PostPlatform {
   return (POST_PLATFORMS as readonly string[]).includes(v);
 }
 
+/**
+ * The academy programs a shoot, post or task can be for. Stored as-is in the
+ * `program` column (null = untagged); the order here is the picker's and the
+ * calendar filter's.
+ */
+export const PROGRAMS = ["SAT", "AP", "Global", "Imkon", "Academy", "Alumni"] as const;
+export type Program = (typeof PROGRAMS)[number];
+
+export function isProgram(v: string | null | undefined): v is Program {
+  return (PROGRAMS as readonly (string | null | undefined)[]).includes(v);
+}
+
 // A task's due date against today (Tashkent). Done tasks have no urgency.
 export type TaskDue = "overdue" | "today" | "later" | "none";
 

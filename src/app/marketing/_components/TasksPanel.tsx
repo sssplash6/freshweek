@@ -32,6 +32,8 @@ import {
   MemberChip,
   PanelHeader,
   primaryBtn,
+  ProgramField,
+  ProgramTag,
   RowList,
   useAction,
 } from "./ui";
@@ -53,6 +55,7 @@ export type TaskRow = {
   canMove: boolean;
   /** Setter (or a manager): may edit and withdraw. */
   canEdit: boolean;
+  program: string | null;
 };
 
 type TaskValues = {
@@ -60,12 +63,14 @@ type TaskValues = {
   note: string | null;
   dueOn: string | null;
   assigneeId: string;
+  program: string | null;
 };
 
 export function TaskForm({
   members,
   initial,
   defaultDue,
+  defaultProgram,
   submitLabel,
   pending,
   error,
@@ -76,6 +81,8 @@ export function TaskForm({
   initial?: TaskRow;
   /** Pre-filled due date for a fresh task — the day picked on the calendar. */
   defaultDue?: string;
+  /** Pre-picked program for a fresh task: the calendar's active filter. */
+  defaultProgram?: string | null;
   submitLabel: string;
   pending: boolean;
   error: string | null;
@@ -86,6 +93,7 @@ export function TaskForm({
   const [assigneeId, setAssigneeId] = useState(initial?.assignee.id ?? "");
   const [dueOn, setDueOn] = useState(initial?.dueYmd ?? defaultDue ?? "");
   const [note, setNote] = useState(initial?.note ?? "");
+  const [program, setProgram] = useState(initial?.program ?? defaultProgram ?? "");
   const ready = title.trim() !== "" && assigneeId !== "";
   const options = assigneeOptions(members, initial?.assignee ?? null);
 
@@ -95,7 +103,13 @@ export function TaskForm({
       onSubmit={(e) => {
         e.preventDefault();
         if (!ready || pending) return;
-        onSubmit({ title, note: note.trim() || null, dueOn: dueOn || null, assigneeId });
+        onSubmit({
+          title,
+          note: note.trim() || null,
+          dueOn: dueOn || null,
+          assigneeId,
+          program: program || null,
+        });
       }}
     >
       <Field label="What needs doing?">
@@ -137,6 +151,7 @@ export function TaskForm({
           />
         </Field>
       </div>
+      <ProgramField value={program} onChange={setProgram} />
       <Field label="Details" optional>
         <textarea
           value={note}
@@ -288,6 +303,7 @@ export function TaskItem({
             >
               {task.title}
             </span>
+            <ProgramTag program={task.program} />
             {task.dueLabel && !task.done && (
               <span className={`text-xs ${DUE_TEXT[task.due]}`}>
                 {task.due === "overdue"

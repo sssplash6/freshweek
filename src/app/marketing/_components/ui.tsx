@@ -2,6 +2,7 @@
 
 import { useLayoutEffect, useRef, useState, useTransition, type ReactNode } from "react";
 import type { ActionResult } from "@/lib/actionResult";
+import { PROGRAMS } from "@/lib/marketing";
 import { XIcon } from "../../dashboard/_components/icons";
 
 // The content plan's shared pieces — one set of field, button and row styles
@@ -86,6 +87,38 @@ export function Field({
       </span>
       {children}
     </label>
+  );
+}
+
+/** Which program the row is for: a select shared by all three forms. */
+export function ProgramField({
+  value,
+  onChange,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+}) {
+  return (
+    <Field label="Program" optional>
+      <select value={value} onChange={(e) => onChange(e.target.value)} className={inputCls}>
+        <option value="">No program</option>
+        {PROGRAMS.map((p) => (
+          <option key={p} value={p}>
+            {p}
+          </option>
+        ))}
+      </select>
+    </Field>
+  );
+}
+
+/** The program a row is tagged with, beside its title. */
+export function ProgramTag({ program }: { program: string | null }) {
+  if (!program) return null;
+  return (
+    <span className="shrink-0 rounded-full border border-line px-2 py-0.5 text-[11px] font-medium text-muted-fg">
+      {program}
+    </span>
   );
 }
 

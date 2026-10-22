@@ -85,6 +85,7 @@ export default async function MarketingPage() {
         shootAt: true,
         location: true,
         note: true,
+        program: true,
         finishedUrl: true,
         rawUrl: true,
         reportedAt: true,
@@ -103,6 +104,7 @@ export default async function MarketingPage() {
         platforms: true,
         caption: true,
         postUrl: true,
+        program: true,
         shoot: { select: { id: true, title: true, finishedUrl: true } },
       },
     }),
@@ -113,6 +115,7 @@ export default async function MarketingPage() {
         title: true,
         note: true,
         dueOn: true,
+        program: true,
         percent: true,
         completedAt: true,
         createdById: true,
@@ -142,6 +145,7 @@ export default async function MarketingPage() {
       ? `Filed${s.reportedBy?.name ? ` by ${s.reportedBy.name}` : ""} · ${formatDateTimeTz(s.reportedAt)}`
       : null,
     postCount: s._count.posts,
+    program: s.program,
   });
   const shootRows = shoots.map(toShootRow);
   const awaitingShoots = shootRows.filter((s) => s.state === "awaiting-report");
@@ -175,6 +179,7 @@ export default async function MarketingPage() {
     postUrl: p.postUrl,
     shoot: p.shoot,
     publishedLabel: p.publishedAt ? `Marked published ${formatDateTimeTz(p.publishedAt)}` : null,
+    program: p.program,
   });
   const postRows = posts.map(toPostRow);
   const overduePosts = postRows.filter((p) => p.state === "overdue");
@@ -204,6 +209,7 @@ export default async function MarketingPage() {
       assignee: toMember(t.assignee),
       canMove: access.manager || mine || setByMe,
       canEdit: access.manager || setByMe,
+      program: t.program,
     };
   };
   const taskRows = tasks.map(toTaskRow);

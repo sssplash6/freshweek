@@ -34,6 +34,8 @@ import {
   MemberChip,
   PanelHeader,
   primaryBtn,
+  ProgramField,
+  ProgramTag,
   RowClock,
   RowList,
   secondaryBtn,
@@ -58,6 +60,7 @@ export type ShootRow = {
   rawUrl: string | null;
   reportedLabel: string | null;
   postCount: number;
+  program: string | null;
 };
 
 type ShootValues = {
@@ -67,6 +70,7 @@ type ShootValues = {
   location: string;
   assigneeId: string | null;
   note: string | null;
+  program: string | null;
 };
 
 /** The shoot's editable fields — shared by the composer and the row editor. */
@@ -74,6 +78,7 @@ export function ShootForm({
   members,
   initial,
   defaultDate,
+  defaultProgram,
   submitLabel,
   pending,
   error,
@@ -83,6 +88,8 @@ export function ShootForm({
   members: Member[];
   initial?: ShootRow;
   defaultDate: string;
+  /** Pre-picked program for a fresh shoot: the calendar's active filter. */
+  defaultProgram?: string | null;
   submitLabel: string;
   pending: boolean;
   error: string | null;
@@ -95,6 +102,7 @@ export function ShootForm({
   const [location, setLocation] = useState(initial?.location ?? "");
   const [assigneeId, setAssigneeId] = useState(initial?.assignee?.id ?? "");
   const [note, setNote] = useState(initial?.note ?? "");
+  const [program, setProgram] = useState(initial?.program ?? defaultProgram ?? "");
   const ready =
     title.trim() !== "" && date !== "" && time !== "" && location.trim() !== "";
   const options = assigneeOptions(members, initial?.assignee ?? null);
@@ -112,6 +120,7 @@ export function ShootForm({
           location,
           assigneeId: assigneeId || null,
           note: note.trim() || null,
+          program: program || null,
         });
       }}
     >
@@ -174,6 +183,7 @@ export function ShootForm({
           </select>
         </Field>
       </div>
+      <ProgramField value={program} onChange={setProgram} />
       <Field label="Brief for the creator" optional>
         <textarea
           value={note}
@@ -302,6 +312,7 @@ export function ShootItem({
             <span className="break-words text-sm font-semibold text-ink">
               {shoot.title}
             </span>
+            <ProgramTag program={shoot.program} />
             {shoot.state !== "upcoming" && <StatePill {...meta} />}
           </div>
           <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-fg">
