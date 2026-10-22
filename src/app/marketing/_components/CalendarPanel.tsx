@@ -32,8 +32,9 @@ import {
 // opening in the column with the date pre-filled. Clicking a chip goes
 // further: it selects the day AND spotlights that row, scrolling it into view.
 // The program pills above the grid narrow everything (grid, counts, day
-// column) to one program's work, and whatever is added on the day column
-// while a program is picked comes pre-tagged with it.
+// column) to the picked programs' work (several can be on at once), and
+// whatever is added on the day column while exactly one program is picked
+// comes pre-tagged with it.
 
 type CalItem =
   | { kind: "shoot"; row: ShootRow }
@@ -42,10 +43,9 @@ type CalItem =
 
 const WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
-/** The calendar's program filter: everything, one program, or the untagged. */
-type ProgramFilter = "all" | "none" | Program;
+/** One program filter pill: a program, or the untagged. None picked = all. */
+type ProgramFilter = "none" | Program;
 const FILTERS: { key: ProgramFilter; label: string }[] = [
-  { key: "all", label: "All" },
   ...PROGRAMS.map((p) => ({ key: p, label: p })),
   { key: "none", label: "No program" },
 ];
@@ -341,7 +341,7 @@ export function CalendarPanel({
   const [selected, setSelected] = useState(todayYmd);
   /** The chip last clicked: its row is spotlighted in the day column. */
   const [openKey, setOpenKey] = useState<string | null>(null);
-  const [filter, setFilter] = useState<ProgramFilter>("all");
+  const [filter, setFilter] = useState<ProgramFilter[]>([]);
   const select = (ymd: string, key: string | null = null) => {
     setSelected(ymd);
     setOpenKey(key);
@@ -355,7 +355,7 @@ export function CalendarPanel({
       map.set(ymd, arr);
     };
     const shows = (program: string | null) =>
-      filter === "all" || (filter === "none" ? !program : program === filter);
+      filter.length === 0 || filter.includes((program as Program | null) ?? "none");
     for (const s of shoots) if (shows(s.program)) push(s.dateYmd, { kind: "shoot", row: s });
     for (const p of posts) if (shows(p.program)) push(p.dateYmd, { kind: "post", row: p });
     for (const t of tasks)
@@ -371,7 +371,7 @@ export function CalendarPanel({
     <section id="calendar" className="scroll-mt-6">
       <PanelHeader
         title="Calendar"
-        hint="The whole department's month at a glance: shoots, posts and task deadlines together. Pick a program to see only its work."
+        hint="The whole department's month at a glance: shoots, posts and task deadlines together. Pick one or more programs to see only their work."
       />
 
       <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_22rem] lg:items-start">
@@ -426,14 +426,17 @@ export function CalendarPanel({
             aria-label="Filter by program"
             className="mb-2 flex flex-wrap gap-1.5 px-1"
           >
-            {FILTERS.map((f) => {
-              const on = filter === f.key;
+            {[{ key: null, label: "All" }, ...FILTERS].map((f) => {
+              const on = f.key ? filter.includes(f.key) : filter.length === 0;
               return (
                 <button
-                  key={f.key}
+                  key={f.key ?? "all"}
                   type="button"
                   onClick={() => {
-                    setFilter(f.key);
+                    const k = f.key;
+                    setFilter((cur) =>
+                      !k ? [] : cur.includes(k) ? cur.filter((x) => x !== k) : [...cur, k],
+                    );
                     setOpenKey(null);
                   }}
                   aria-pressed={on}
@@ -543,7 +546,7 @@ export function CalendarPanel({
           members={members}
           shootOptions={shootOptions}
           openKey={openKey}
-          program={filter === "all" || filter === "none" ? null : filter}
+          program={filter.length === 1 && filter[0] !== "none" ? filter[0] : null}
         />
       </div>
     </section>
