@@ -299,6 +299,33 @@ export const GUIDE_GROUPS: GuideGroup[] = [
           "Commands for Department Leads",
         ],
       },
+      {
+        slug: "google-calendar",
+        title: "Guidelines for Using Google Calendar",
+        kicker: "Internal guide · For all employees",
+        purpose:
+          "Color meanings, event notes, and rescheduling rules for Freshman Academy.",
+        monogram: "GC",
+        tone: "cyan",
+        version: "v1.0",
+        dated: "October 2026",
+        owner: { name: "Sofina Karimova", role: "Marketing Assistant" },
+        approvedBy: {
+          name: "Valera Arakelyan",
+          role: "CEO, Freshman Academy",
+        },
+        pages: 3,
+        pdf: "google-calendar-guidelines.pdf",
+        departments: null,
+        sections: [
+          "Who Can Add Meetings, Classes and Other Events",
+          "What Each Color Means",
+          "Rules: Who to Approve With",
+          "How to Add Notes When Hosting an Event",
+          "How to Make an Appointment Through the Calendar",
+          "How to Create Your Own Booking Page",
+        ],
+      },
     ],
   },
 ];
