@@ -156,11 +156,13 @@ async function reconcileClock(
     select: {
       id: true,
       email: true,
-      // Every week for this cycle (starting on/after the deadline). Usually one,
+      // Every week for this cycle (starting on/after its Monday). Usually one,
       // but a redeploy race in getOrCreateCurrentWeek/startNewWeek can leave a
-      // stray duplicate — so we look at all of them, not just one.
+      // stray duplicate — so we look at all of them, not just one. Keyed off
+      // the Monday, not the deadline: a clock west of UTC puts Sunday 17:00
+      // after Monday 00:00 UTC, where weeks start.
       weeks: {
-        where: { startDate: { gte: submissionDeadline } },
+        where: { startDate: { gte: cycle.weekStart } },
         select: { id: true, submittedAt: true },
       },
       // This cycle's late-submission fine, if one has been issued already.

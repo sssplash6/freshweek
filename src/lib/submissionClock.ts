@@ -2,8 +2,9 @@
 //
 // The rule is "goals in by 17:00 on Sunday". For almost everyone that's 17:00 in
 // Tashkent, where the company runs. Someone reporting from elsewhere is judged
-// on the clock they actually live by: malika@freshman.academy is at GMT+8, so
-// her Sunday 17:00 lands at 09:00 UTC — three hours before the team's.
+// on the clock they actually live by: malika@freshman.academy is in San
+// Francisco, so her Sunday 17:00 lands at 01:00 UTC Monday, 13 hours after
+// the team's (and still before the Monday meeting).
 //
 // SUBMISSION ONLY. The Monday meeting is one event the whole team joins
 // at a single instant, so the $40 "missed the meeting" tier stays on the
@@ -17,7 +18,10 @@
 import { COMPANY_UTC_OFFSET_HOURS } from "@/lib/lateness";
 
 const BUILT_IN_OFFSETS: Record<string, number> = {
-  "malika@freshman.academy": 8,
+  // ponytail: fixed PST. Offsets are whole hours with no DST, so from March to
+  // November (PDT) her deadline reads as 18:00 local, an hour lenient. Resolve
+  // America/Los_Angeles per cycle if that hour ever matters.
+  "malika@freshman.academy": -8,
 };
 
 /** Real UTC offsets run from -12 to +14; anything else is a typo, not a zone. */
