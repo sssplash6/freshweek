@@ -375,7 +375,7 @@ export default async function PayrollPage() {
             {`${label} is being held open`}
           </p>
           <p className="mt-1 text-sm text-muted-fg">
-            {`Filing for ${label} would normally have closed ${formatTashkent(period.filingClosesAt)}. It's open to everyone as an exception, with no new deadline — file whenever you're ready, and you'll be told before it closes.`}
+            {`Filing for ${label} normally runs ${formatTashkent(period.filingOpensAt)} to ${formatTashkent(period.filingClosesAt)}. It's open to everyone as an exception, with no new deadline. File whenever you're ready, and you'll be told before it closes.`}
           </p>
         </div>
       )}

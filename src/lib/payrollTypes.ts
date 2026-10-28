@@ -82,7 +82,7 @@ export function payrollOpenToEmails(): string[] {
  */
 export const PAYROLL_HELD_OPEN: { year: number; month: number } | null = {
   year: 2026,
-  month: 9,
+  month: 10,
 };
 
 /** Whether this period is the one being held open. */
