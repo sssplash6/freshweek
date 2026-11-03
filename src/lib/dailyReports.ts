@@ -8,11 +8,8 @@
 // Adding someone mid-stream? Give them a DAILY_REPORTER_SINCE entry below so
 // the fine sweep doesn't back-fine days from before they owed anything.
 // The roster since 2026-10-19 (the earlier one was dropped when reports came
-// back from their optional spell).
-const BUILT_IN_REPORTERS = [
-  "behruz.edu@gmail.com",
-  "rustam.ganijonov@freshman.academy",
-];
+// back from their optional spell); Rustam left it on 2026-11-03.
+const BUILT_IN_REPORTERS = ["behruz.edu@gmail.com"];
 
 const BUILT_IN_RECIPIENT = "valera@freshman.academy";
 
@@ -60,7 +57,6 @@ export function dailyReportRecipient(): string {
 // Env-added reporters fall back to the first word of their profile name.
 const REPORTER_FIRST_NAMES: Record<string, string> = {
   "behruz.edu@gmail.com": "Behruz",
-  "rustam.ganijonov@freshman.academy": "Rustam",
 };
 
 /** The name daily-report surfaces call this person by. */
