@@ -11,6 +11,7 @@ import {
   roundingCents,
   MAX_RECEIPT_BYTES,
   methodIsCash,
+  partAmount,
   paymentFieldsFor,
   validatePaymentDetails,
   PAYROLL_METHOD_LABEL,
@@ -57,6 +58,11 @@ export type PrefillExpense = {
  * expenses — shown as sums, not just a result. One submit files the request
  * and generates the invoice PDF; the same form reopens to refile after a
  * decline, or to edit a request finance hasn't reached yet (see `mode`).
+ *
+ * Someone in two or more departments (`departments`) gets a salary box per
+ * department instead of one, and picks which department their bonuses, fines
+ * and expenses go with: the request is split into parts that each department's
+ * lead approves and pays on their own (PayrollPart).
  */
 export function PayrollForm({
   periodLabel,
@@ -64,6 +70,7 @@ export function PayrollForm({
   snapshot,
   prefill,
   mode,
+  departments,
 }: {
   periodLabel: string;
   /** When filing shuts, or null while the period is held open with no cutoff. */
@@ -80,6 +87,11 @@ export function PayrollForm({
     details: PaymentDetails;
     /** The declined submission's expense lines, back on the reopened form. */
     expenses?: PrefillExpense[];
+    /** A filed request's department split, as starting values. */
+    parts?: {
+      salaries: Record<string, number>;
+      ledgerDepartmentId: string | null;
+    };
   };
   /**
    * Which of the three ways this form is open:
@@ -97,13 +109,33 @@ export function PayrollForm({
         note: string | null;
       }
     | { kind: "edit" };
+  /**
+   * The departments that pay this person, when there are two or more — the
+   * form then splits the salary between them. Absent for everyone else.
+   */
+  departments?: { id: string; name: string }[];
 }) {
+  const split = departments !== undefined && departments.length >= 2;
   const [base, setBase] = useState(
     prefill.baseSalary != null ? String(prefill.baseSalary) : "",
   );
-  // Optional second base salary (another department). Not stored separately:
-  // it is summed into the one baseSalary figure everything downstream uses.
-  const [base2, setBase2] = useState<string | null>(null);
+  // One salary per department, as typed. Starts from the last filing's split
+  // where that department was part of it, and blank otherwise — a department
+  // added since then gets no guessed figure.
+  const [salaries, setSalaries] = useState<Record<string, string>>(() =>
+    Object.fromEntries(
+      (departments ?? []).map((d) => {
+        const last = prefill.parts?.salaries[d.id];
+        return [d.id, last != null ? String(last) : ""];
+      }),
+    ),
+  );
+  const [ledgerDept, setLedgerDept] = useState(() => {
+    const last = prefill.parts?.ledgerDepartmentId;
+    return departments?.some((d) => d.id === last)
+      ? last!
+      : (departments?.[0]?.id ?? "");
+  });
   const [expenses, setExpenses] = useState<ExpenseDraft[]>(() =>
     (prefill.expenses ?? []).map((e, i) => ({
       key: i + 1,
@@ -125,11 +157,18 @@ export function PayrollForm({
   const [error, setError] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
 
-  const base1Value = /^\d+$/.test(base.trim()) ? Number(base.trim()) : null;
-  const base2Trim = base2?.trim() ?? "";
-  const base2Value = base2Trim === "" ? 0 : /^\d+$/.test(base2Trim) ? Number(base2Trim) : null;
-  const baseValue =
-    base1Value == null || base2Value == null ? null : base1Value + base2Value;
+  const wholeDollars = (text: string) =>
+    /^\d+$/.test(text.trim()) ? Number(text.trim()) : null;
+  // Each department's salary, or null where the box isn't a whole number yet.
+  const salaryValues = (departments ?? []).map((d) => ({
+    ...d,
+    salary: wholeDollars(salaries[d.id] ?? ""),
+  }));
+  const baseValue = split
+    ? salaryValues.some((d) => d.salary == null)
+      ? null
+      : salaryValues.reduce((sum, d) => sum + d.salary!, 0)
+    : wholeDollars(base);
   const expensesTotalCents = expenses.reduce(
     (s, e) => s + (parseAmountCents(e.amount) ?? 0),
     0,
@@ -143,6 +182,19 @@ export function PayrollForm({
   // What lands in the account: the exact sum, rounded to the whole dollar once.
   const net = computeNet(totals);
   const rounding = roundingCents(totals);
+  // What each department will pay, exactly as the server will split it.
+  const partMoney = salaryValues.map((d) => ({
+    salary: d.salary ?? 0,
+    carriesLedger: d.id === ledgerDept,
+  }));
+  const partPreview = split
+    ? salaryValues.map((d, i) => ({
+        id: d.id,
+        name: d.name,
+        amount: partAmount(partMoney[i], partMoney, net),
+        carriesLedger: d.id === ledgerDept,
+      }))
+    : [];
 
   function patchExpense(key: number, patch: Partial<ExpenseDraft>) {
     setExpenses((prev) =>
@@ -170,6 +222,15 @@ export function PayrollForm({
   }
 
   function submit() {
+    if (split) {
+      const missing = salaryValues.find((d) => d.salary == null);
+      if (missing) {
+        setError(
+          `Enter your salary from ${missing.name} in whole dollars — 0 if they pay you nothing this month.`,
+        );
+        return;
+      }
+    }
     if (baseValue == null) {
       setError("Enter your base salary in whole dollars.");
       return;
@@ -193,10 +254,26 @@ export function PayrollForm({
       setError("The total can't go below zero — your fines exceed the rest.");
       return;
     }
+    const carrying = partPreview.find((p) => p.carriesLedger);
+    if (carrying && carrying.amount < 0) {
+      setError(
+        `Your fines are more than your ${carrying.name} part — put bonuses, fines and expenses on a department with a bigger share.`,
+      );
+      return;
+    }
 
     setError(null);
     const fd = new FormData();
     fd.set("baseSalary", String(baseValue));
+    if (split) {
+      fd.set(
+        "parts",
+        JSON.stringify(
+          salaryValues.map((d) => ({ departmentId: d.id, salary: String(d.salary) })),
+        ),
+      );
+      fd.set("ledgerDepartmentId", ledgerDept);
+    }
     fd.set("paymentMethod", method);
     for (const f of detailFields) {
       fd.set(`detail_${f.key}`, (details[f.key] ?? "").trim());
@@ -307,59 +384,88 @@ export function PayrollForm({
         )}
       </div>
 
-      {/* Base salary */}
-      <div className="mt-4">
-        <label
-          htmlFor="payroll-base"
-          className="text-[11px] font-semibold uppercase tracking-wide text-muted-fg"
-        >
-          Base salary (USD)
-        </label>
-        <div className="mt-1.5 flex items-center gap-2">
-          <span className="text-sm font-semibold text-muted-fg">$</span>
-          <input
-            id="payroll-base"
-            type="text"
-            inputMode="numeric"
-            value={base}
-            onChange={(e) => setBase(e.target.value)}
-            placeholder="500"
-            className="w-32 rounded-lg border border-line px-3 py-2 text-sm tabular-nums text-ink placeholder:text-muted-fg focus:border-brand focus:outline-none"
-          />
-          {base2 === null ? (
-            <button
-              type="button"
-              onClick={() => setBase2("")}
-              aria-label="Add a base salary from another department"
-              title="Add a base salary from another department"
-              className="flex h-9 w-9 items-center justify-center rounded-lg border border-line text-lg leading-none text-muted-fg hover:border-brand hover:text-brand"
+      {/* Base salary — one box, or one per department */}
+      {split ? (
+        <div className="mt-4">
+          <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-fg">
+            Base salary by department (USD)
+          </p>
+          <p className="mt-1 text-xs text-muted-fg">
+            You work in more than one department, so each pays its own part —
+            and each department&rsquo;s lead approves and pays only theirs.
+            Put 0 for a department that pays you nothing this month.
+          </p>
+          <ul className="mt-2 flex flex-col gap-2">
+            {salaryValues.map((d) => (
+              <li key={d.id} className="flex flex-wrap items-center gap-2">
+                <label
+                  htmlFor={`payroll-base-${d.id}`}
+                  className="w-44 min-w-0 truncate text-sm text-ink"
+                >
+                  {d.name}
+                </label>
+                <span className="text-sm font-semibold text-muted-fg">$</span>
+                <input
+                  id={`payroll-base-${d.id}`}
+                  type="text"
+                  inputMode="numeric"
+                  value={salaries[d.id] ?? ""}
+                  onChange={(e) =>
+                    setSalaries((prev) => ({ ...prev, [d.id]: e.target.value }))
+                  }
+                  placeholder="0"
+                  className="w-32 rounded-lg border border-line px-3 py-2 text-sm tabular-nums text-ink placeholder:text-muted-fg focus:border-brand focus:outline-none"
+                />
+              </li>
+            ))}
+          </ul>
+          <label className="mt-3 flex flex-wrap items-center gap-2 text-xs text-muted-fg">
+            <span>Bonuses, fines and expenses go with</span>
+            <select
+              value={ledgerDept}
+              onChange={(e) => setLedgerDept(e.target.value)}
+              className="rounded-lg border border-line px-2.5 py-1.5 text-sm text-ink focus:border-brand focus:outline-none"
             >
-              +
-            </button>
-          ) : (
-            <>
-              <span className="text-sm font-semibold text-muted-fg">+ $</span>
-              <input
-                type="text"
-                inputMode="numeric"
-                value={base2}
-                onChange={(e) => setBase2(e.target.value)}
-                placeholder="Other department"
-                aria-label="Second base salary (other department)"
-                className="w-32 rounded-lg border border-line px-3 py-2 text-sm tabular-nums text-ink placeholder:text-muted-fg focus:border-brand focus:outline-none"
-              />
-              <button
-                type="button"
-                onClick={() => setBase2(null)}
-                aria-label="Remove the second base salary"
-                className="flex h-9 w-9 items-center justify-center rounded-lg border border-line text-lg leading-none text-muted-fg hover:border-red-300 hover:text-red-600"
-              >
-                ×
-              </button>
-            </>
-          )}
+              {salaryValues.map((d) => (
+                <option key={d.id} value={d.id}>
+                  {d.name}
+                </option>
+              ))}
+            </select>
+          </label>
         </div>
-      </div>
+      ) : (
+        <div className="mt-4">
+          <label
+            htmlFor="payroll-base"
+            className="text-[11px] font-semibold uppercase tracking-wide text-muted-fg"
+          >
+            Base salary (USD)
+          </label>
+          <div className="mt-1.5 flex items-center gap-2">
+            <span className="text-sm font-semibold text-muted-fg">$</span>
+            <input
+              id="payroll-base"
+              type="text"
+              inputMode="numeric"
+              value={base}
+              onChange={(e) => setBase(e.target.value)}
+              placeholder="500"
+              className="w-32 rounded-lg border border-line px-3 py-2 text-sm tabular-nums text-ink placeholder:text-muted-fg focus:border-brand focus:outline-none"
+            />
+          </div>
+          {/* This used to be a "+" for a second salary from another
+              department, summed into this one figure. That sent the other
+              department's money to this department's lead to approve and pay,
+              and its own lead never saw it. A seat in that department is what
+              splits the request properly instead. */}
+          <p className="mt-1.5 text-xs text-muted-fg">
+            Paid by another department too? Ask an admin to add you to it on the
+            Departments page. Your salary is then split here, and each
+            department&rsquo;s lead approves and pays their own part.
+          </p>
+        </div>
+      )}
 
       {/* Ledger snapshot preview */}
       <div className="mt-5">
@@ -578,6 +684,20 @@ export function PayrollForm({
               {formatMoney(net)}
             </dd>
           </div>
+          {/* Who sends which part of it. The parts add up to the total. */}
+          {partPreview.map((p) => (
+            <div key={p.id} className="flex items-center justify-between text-xs">
+              <dt className="text-muted-fg">
+                {`from ${p.name}`}
+                {p.carriesLedger && partPreview.length > 1 && " (with bonuses, fines and expenses)"}
+              </dt>
+              <dd
+                className={`font-medium tabular-nums ${p.amount < 0 ? "text-red-600" : "text-ink"}`}
+              >
+                {formatMoney(p.amount)}
+              </dd>
+            </div>
+          ))}
         </dl>
       </div>
 

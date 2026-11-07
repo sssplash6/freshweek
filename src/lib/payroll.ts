@@ -34,9 +34,19 @@ import {
   type PayrollMethod,
 } from "@/lib/payrollTypes";
 import { approvableFilerIds } from "@/lib/payrollApproval";
+import {
+  ledDepartmentIds,
+  lockSubmission,
+  partAmount,
+  splitLine,
+} from "@/lib/payrollParts";
 import { notify } from "@/lib/notifications";
 import { sendEmails } from "@/lib/email";
-import type { PayrollStatus, Prisma } from "@/generated/prisma/client";
+import type {
+  PayrollPartAction,
+  PayrollStatus,
+  Prisma,
+} from "@/generated/prisma/client";
 
 type Db = Prisma.TransactionClient | typeof prisma;
 
@@ -226,6 +236,13 @@ export type Payer = {
   /** Finance: every filer. A lead: only `filerIds`. */
   all: boolean;
   filerIds: ReadonlySet<string>;
+  /**
+   * The normal departments a lead leads — what narrows them, on a request
+   * split by department, to the parts of their own departments
+   * (payableDepartments in lib/payrollParts.ts). Empty for finance, who pay
+   * any part.
+   */
+  ledDepartments: ReadonlySet<string>;
 };
 
 /** Throw unless the signed-in user may pay somebody; returns what they may pay. */
@@ -233,11 +250,16 @@ export async function requirePayer(session: SessionLike): Promise<Payer> {
   const actorId = session?.user?.id;
   if (!actorId) throw new Error("Not authorized");
   if (isFinance(session?.user?.email)) {
-    return { actorId, all: true, filerIds: new Set() };
+    return { actorId, all: true, filerIds: new Set(), ledDepartments: new Set() };
   }
   const led = await approvableFilerIds(prisma, actorId);
   if (led.size === 0) throw new Error("Not authorized");
-  return { actorId, all: false, filerIds: led };
+  return {
+    actorId,
+    all: false,
+    filerIds: led,
+    ledDepartments: await ledDepartmentIds(prisma, actorId),
+  };
 }
 
 /** Whether this payer may settle `filerId`'s request. */
@@ -504,6 +526,8 @@ export async function applyTransition(
     actorId: string | null;
     note?: string | null;
     data?: Prisma.PayrollSubmissionUpdateManyMutationInput;
+    /** Marks an event about one department's part (PayrollEvent.partAction). */
+    partAction?: PayrollPartAction;
   },
 ): Promise<void> {
   assertTransition(opts.from, opts.to);
@@ -521,6 +545,7 @@ export async function applyTransition(
       fromStatus: opts.from,
       toStatus: opts.to,
       note: opts.note?.trim().slice(0, 1000) || null,
+      partAction: opts.partAction ?? null,
     },
   });
 }
@@ -805,104 +830,133 @@ export async function processSubmission(opts: {
         status: true,
         fineLines: true,
         bonusLines: true,
+        _count: { select: { parts: true } },
       },
     });
     if (!sub) throw new Error("Request not found.");
+    // A request split by department is paid a part at a time (payParts) —
+    // paying it whole from here would skip the very thing the split is for.
+    if (sub._count.parts > 0) {
+      throw new Error("This request is split by department — pay it part by part.");
+    }
     // WITH_LEAD passes too: who may pay one is decided by the caller
     // (FINANCE_PAYABLE in app/payroll/finance/actions.ts).
     if (!TRANSITIONS[sub.status].includes("PROCESSED")) {
       throw new Error("Only a request awaiting payment can be processed.");
     }
 
-    // Re-check every snapshotted source against the live ledger.
-    const reasons: string[] = [];
-    const finesById = new Map<
-      string,
-      { amount: number; paidAmount: number; paidAt: Date | null }
-    >();
-    for (const line of sub.fineLines) {
-      const label = `${PENALTY_LABEL[line.type]} fine (${formatMoney(line.amount)})`;
-      const penalty = line.penaltyId
-        ? await tx.penalty.findUnique({
-            where: { id: line.penaltyId },
-            select: { amount: true, paidAmount: true, paidAt: true },
-          })
-        : null;
-      if (!penalty) {
-        reasons.push(`${label} was deleted after filing.`);
-        continue;
-      }
-      finesById.set(line.penaltyId!, penalty);
-      if (penalty.paidAt !== null || penalty.amount - penalty.paidAmount < line.amount) {
-        reasons.push(`${label} was settled outside payroll after filing.`);
-      }
-    }
-    for (const line of sub.bonusLines) {
-      const label = `${formatMoney(line.amount)} bonus`;
-      const bonus = line.bonusId
-        ? await tx.bonus.findUnique({
-            where: { id: line.bonusId },
-            select: { amount: true, payrollSubmissionId: true },
-          })
-        : null;
-      if (!bonus) reasons.push(`${label} was deleted after filing.`);
-      else if (bonus.payrollSubmissionId) reasons.push(`${label} was already paid out.`);
-      else if (bonus.amount !== line.amount) reasons.push(`${label} changed amount after filing.`);
-    }
-    if (reasons.length > 0) return { ok: false, reasons };
-
-    // Fine write-back: exactly the snapshotted amount against exactly that
-    // fine — never oldest-first over whatever happens to be open today, or a
-    // fine raised after filing could eat money the invoice never deducted.
-    const batchId = sub.fineLines.length > 0 ? randomUUID() : null;
     const now = new Date();
-    for (const line of sub.fineLines) {
-      const fine = finesById.get(line.penaltyId!)!;
-      const paidAmount = fine.paidAmount + line.amount;
-      const updated = await tx.penalty.updateMany({
-        where: { id: line.penaltyId!, paidAt: null, paidAmount: fine.paidAmount },
-        data: {
-          paidAmount,
-          ...(paidAmount === fine.amount
-            ? { paidAt: now, settledById: opts.actorId }
-            : {}),
-        },
-      });
-      if (updated.count === 0) {
-        throw new Error("The fines ledger changed while processing — try again.");
-      }
-      await tx.finePayment.create({
-        data: {
-          penaltyId: line.penaltyId!,
-          amount: line.amount,
-          batchId: batchId!,
-          source: "PAYROLL",
-          recordedById: opts.actorId,
-        },
-      });
-    }
-
-    // Bonuses are consumed by this submission — they can never snapshot again.
-    const bonusIds = sub.bonusLines.map((l) => l.bonusId!);
-    if (bonusIds.length > 0) {
-      const stamped = await tx.bonus.updateMany({
-        where: { id: { in: bonusIds }, payrollSubmissionId: null },
-        data: { payrollSubmissionId: sub.id },
-      });
-      if (stamped.count !== bonusIds.length) {
-        throw new Error("The bonus ledger changed while processing — try again.");
-      }
-    }
+    const settled = await settleLedger(tx, sub, opts.actorId, now);
+    if (!settled.ok) return settled;
 
     await applyTransition(tx, {
       submissionId: sub.id,
       from: sub.status,
       to: "PROCESSED",
       actorId: opts.actorId,
-      data: { processedAt: now, fineBatchId: batchId },
+      data: { processedAt: now, fineBatchId: settled.batchId },
     });
-    return { ok: true, batchId };
+    return settled;
   });
+}
+
+/**
+ * The ledger half of a payment: re-check the snapshot against the live ledger,
+ * write the fine deduction back as one PAYROLL batch, and stamp the bonuses
+ * consumed. No status change — the caller owns that, because a whole request
+ * (processSubmission) and the carrying part of a split one (payParts) move the
+ * status differently once the money is out.
+ */
+async function settleLedger(
+  tx: Prisma.TransactionClient,
+  sub: {
+    id: string;
+    fineLines: { penaltyId: string | null; amount: number; type: PenaltyType }[];
+    bonusLines: { bonusId: string | null; amount: number }[];
+  },
+  actorId: string,
+  now: Date,
+): Promise<ProcessResult> {
+  // Re-check every snapshotted source against the live ledger.
+  const reasons: string[] = [];
+  const finesById = new Map<
+    string,
+    { amount: number; paidAmount: number; paidAt: Date | null }
+  >();
+  for (const line of sub.fineLines) {
+    const label = `${PENALTY_LABEL[line.type]} fine (${formatMoney(line.amount)})`;
+    const penalty = line.penaltyId
+      ? await tx.penalty.findUnique({
+          where: { id: line.penaltyId },
+          select: { amount: true, paidAmount: true, paidAt: true },
+        })
+      : null;
+    if (!penalty) {
+      reasons.push(`${label} was deleted after filing.`);
+      continue;
+    }
+    finesById.set(line.penaltyId!, penalty);
+    if (penalty.paidAt !== null || penalty.amount - penalty.paidAmount < line.amount) {
+      reasons.push(`${label} was settled outside payroll after filing.`);
+    }
+  }
+  for (const line of sub.bonusLines) {
+    const label = `${formatMoney(line.amount)} bonus`;
+    const bonus = line.bonusId
+      ? await tx.bonus.findUnique({
+          where: { id: line.bonusId },
+          select: { amount: true, payrollSubmissionId: true },
+        })
+      : null;
+    if (!bonus) reasons.push(`${label} was deleted after filing.`);
+    else if (bonus.payrollSubmissionId) reasons.push(`${label} was already paid out.`);
+    else if (bonus.amount !== line.amount) reasons.push(`${label} changed amount after filing.`);
+  }
+  if (reasons.length > 0) return { ok: false, reasons };
+
+  // Fine write-back: exactly the snapshotted amount against exactly that
+  // fine — never oldest-first over whatever happens to be open today, or a
+  // fine raised after filing could eat money the invoice never deducted.
+  const batchId = sub.fineLines.length > 0 ? randomUUID() : null;
+  for (const line of sub.fineLines) {
+    const fine = finesById.get(line.penaltyId!)!;
+    const paidAmount = fine.paidAmount + line.amount;
+    const updated = await tx.penalty.updateMany({
+      where: { id: line.penaltyId!, paidAt: null, paidAmount: fine.paidAmount },
+      data: {
+        paidAmount,
+        ...(paidAmount === fine.amount
+          ? { paidAt: now, settledById: actorId }
+          : {}),
+      },
+    });
+    if (updated.count === 0) {
+      throw new Error("The fines ledger changed while processing — try again.");
+    }
+    await tx.finePayment.create({
+      data: {
+        penaltyId: line.penaltyId!,
+        amount: line.amount,
+        batchId: batchId!,
+        source: "PAYROLL",
+        recordedById: actorId,
+      },
+    });
+  }
+
+  // Bonuses are consumed by this submission — they can never snapshot again.
+  const bonusIds = sub.bonusLines.map((l) => l.bonusId!);
+  if (bonusIds.length > 0) {
+    const stamped = await tx.bonus.updateMany({
+      where: { id: { in: bonusIds }, payrollSubmissionId: null },
+      data: { payrollSubmissionId: sub.id },
+    });
+    if (stamped.count !== bonusIds.length) {
+      throw new Error("The bonus ledger changed while processing — try again.");
+    }
+  }
+
+  return { ok: true, batchId };
 }
 
 /**
@@ -921,44 +975,21 @@ export async function unprocessSubmission(opts: {
   await prisma.$transaction(async (tx) => {
     const sub = await tx.payrollSubmission.findUnique({
       where: { id: opts.submissionId },
-      select: { id: true, status: true, fineBatchId: true },
+      select: {
+        id: true,
+        status: true,
+        fineBatchId: true,
+        _count: { select: { parts: true } },
+      },
     });
     if (!sub || sub.status !== "PROCESSED") {
       throw new Error("Only a paid request can be undone — reload.");
     }
-    const paidEvent = await tx.payrollEvent.findFirst({
-      where: { submissionId: sub.id, toStatus: "PROCESSED" },
-      orderBy: { createdAt: "desc" },
-      select: { fromStatus: true },
-    });
-    const backTo = paidEvent?.fromStatus ?? "SUBMITTED";
-
-    if (sub.fineBatchId) {
-      const payments = await tx.finePayment.findMany({
-        where: { batchId: sub.fineBatchId, source: "PAYROLL" },
-        select: {
-          amount: true,
-          penalty: { select: { id: true, amount: true, paidAmount: true } },
-        },
-      });
-      for (const p of payments) {
-        const paidAmount = Math.max(0, p.penalty.paidAmount - p.amount);
-        await tx.penalty.update({
-          where: { id: p.penalty.id },
-          data: {
-            paidAmount,
-            ...(paidAmount < p.penalty.amount
-              ? { paidAt: null, settledById: null }
-              : {}),
-          },
-        });
-      }
-      await tx.finePayment.deleteMany({ where: { batchId: sub.fineBatchId } });
+    if (sub._count.parts > 0) {
+      throw new Error("This request is split by department — undo it part by part.");
     }
-    await tx.bonus.updateMany({
-      where: { payrollSubmissionId: sub.id },
-      data: { payrollSubmissionId: null },
-    });
+    const backTo = await statusPaidFrom(tx, sub.id);
+    await reverseLedger(tx, sub);
 
     await applyTransition(tx, {
       submissionId: sub.id,
@@ -968,6 +999,355 @@ export async function unprocessSubmission(opts: {
       note: "Payment undone.",
       data: { processedAt: null, fineBatchId: null },
     });
+  });
+}
+
+/** The status a paid request was paid out from — where undoing it returns it. */
+async function statusPaidFrom(
+  tx: Prisma.TransactionClient,
+  submissionId: string,
+): Promise<PayrollStatus> {
+  const paidEvent = await tx.payrollEvent.findFirst({
+    where: { submissionId, toStatus: "PROCESSED" },
+    orderBy: { createdAt: "desc" },
+    select: { fromStatus: true },
+  });
+  return paidEvent?.fromStatus ?? "SUBMITTED";
+}
+
+/**
+ * The inverse of settleLedger: delete the PAYROLL fine batch, hand each fine
+ * its balance back (reopening it if the payment had closed it), and release
+ * the bonuses to be claimed again. No status change, for the same reason.
+ */
+async function reverseLedger(
+  tx: Prisma.TransactionClient,
+  sub: { id: string; fineBatchId: string | null },
+): Promise<void> {
+  if (sub.fineBatchId) {
+    const payments = await tx.finePayment.findMany({
+      where: { batchId: sub.fineBatchId, source: "PAYROLL" },
+      select: {
+        amount: true,
+        penalty: { select: { id: true, amount: true, paidAmount: true } },
+      },
+    });
+    for (const p of payments) {
+      const paidAmount = Math.max(0, p.penalty.paidAmount - p.amount);
+      await tx.penalty.update({
+        where: { id: p.penalty.id },
+        data: {
+          paidAmount,
+          ...(paidAmount < p.penalty.amount
+            ? { paidAt: null, settledById: null }
+            : {}),
+        },
+      });
+    }
+    await tx.finePayment.deleteMany({ where: { batchId: sub.fineBatchId } });
+  }
+  await tx.bonus.updateMany({
+    where: { payrollSubmissionId: sub.id },
+    data: { payrollSubmissionId: null },
+  });
+}
+
+// ----- Requests split by department (PayrollPart) -----
+//
+// Someone in two or more departments files one request with a part per
+// department (lib/payrollParts.ts). The request still moves through the same
+// statuses, and every check above still guards it; what changes is that the
+// two moves which used to take the whole request at once now take it a part at
+// a time:
+//
+//   • APPROVAL. Each department's lead approves that department's part. The
+//     request stays WITH_LEAD until the last part is approved, and only then
+//     goes to finance. One lead's yes no longer vouches for another
+//     department's money.
+//   • PAYMENT. Each department's lead pays that department's part. The request
+//     stays where it is until the last part is paid, and only then is it
+//     PROCESSED. One lead's "paid" no longer closes another department's half.
+//
+// The fines and bonuses ride on one part (carriesLedger), so they are settled
+// when THAT part is paid — the money they adjust is that department's payment.
+// Undoing that part's payment reverses them with it.
+//
+// Every part-level move takes a row lock on the submission first
+// (lockSubmission), because each one decides from the OTHER parts whether the
+// request as a whole moves on.
+
+/** One part, named and priced the way a note or a notification reads it. */
+export type PartLine = { departmentName: string; amount: number };
+
+export type PartsStep = {
+  /** The parts this move acted on. */
+  acted: PartLine[];
+  /** The parts still waiting on someone else, after it. */
+  remaining: PartLine[];
+};
+
+const PART_SELECT = {
+  id: true,
+  departmentId: true,
+  departmentName: true,
+  salary: true,
+  carriesLedger: true,
+  approvedAt: true,
+  paidAt: true,
+} as const;
+
+function priced(
+  parts: { departmentName: string; salary: number; carriesLedger: boolean }[],
+  all: { salary: number; carriesLedger: boolean }[],
+  netTotal: number,
+): PartLine[] {
+  return parts.map((p) => ({
+    departmentName: p.departmentName,
+    amount: partAmount(p, all, netTotal),
+  }));
+}
+
+function namesOf(lines: PartLine[]): string {
+  return splitLine(lines, lines.map((l) => l.amount), formatMoney);
+}
+
+/**
+ * A lead approves their departments' parts of a split request (inside the
+ * caller's transaction, so the hand-off notices commit with it). When that was
+ * the last part waiting, the request goes on to finance exactly as a whole
+ * request does on its lead's approval.
+ *
+ * `departmentIds` is the caller's scope (approvableDepartments): the parts of
+ * departments outside it are left for their own lead.
+ */
+export async function approveParts(
+  tx: Prisma.TransactionClient,
+  opts: {
+    submissionId: string;
+    actorId: string;
+    departmentIds: ReadonlySet<string>;
+  },
+): Promise<PartsStep & { toFinance: boolean }> {
+  await lockSubmission(tx, opts.submissionId);
+  const sub = await tx.payrollSubmission.findUnique({
+    where: { id: opts.submissionId },
+    select: {
+      status: true,
+      netTotal: true,
+      parts: { orderBy: { position: "asc" }, select: PART_SELECT },
+    },
+  });
+  if (!sub || sub.status !== "WITH_LEAD") {
+    throw new Error("That request has already moved on — reload to see where it is.");
+  }
+  const mine = sub.parts.filter(
+    (p) => p.departmentId !== null && opts.departmentIds.has(p.departmentId),
+  );
+  if (mine.length === 0) {
+    throw new Error("None of this request is yours to approve.");
+  }
+  const toApprove = mine.filter((p) => p.approvedAt === null);
+  if (toApprove.length === 0) {
+    throw new Error("You've already approved your part — it's waiting on the other department.");
+  }
+
+  const now = new Date();
+  await tx.payrollPart.updateMany({
+    where: { id: { in: toApprove.map((p) => p.id) }, approvedAt: null },
+    data: { approvedAt: now, approvedById: opts.actorId },
+  });
+  const acted = priced(toApprove, sub.parts, sub.netTotal);
+  const remaining = priced(
+    sub.parts.filter((p) => p.approvedAt === null && !toApprove.includes(p)),
+    sub.parts,
+    sub.netTotal,
+  );
+
+  await applyTransition(tx, {
+    submissionId: opts.submissionId,
+    from: "WITH_LEAD",
+    to: "WITH_LEAD",
+    actorId: opts.actorId,
+    partAction: "APPROVED",
+    note:
+      `Approved ${namesOf(acted)}.` +
+      (remaining.length > 0 ? ` Still waiting on ${namesOf(remaining)}.` : ""),
+  });
+  if (remaining.length === 0) {
+    await applyTransition(tx, {
+      submissionId: opts.submissionId,
+      from: "WITH_LEAD",
+      to: "SUBMITTED",
+      actorId: opts.actorId,
+      note: "Every department's part is approved.",
+    });
+  }
+  return { acted, remaining, toFinance: remaining.length === 0 };
+}
+
+/**
+ * Pay some parts of a split request — the ones in the payer's scope that are
+ * still unpaid. `departmentIds: "all"` is finance, who may pay any part.
+ *
+ * Paying the part that carries the ledger is when the fines are deducted and
+ * the bonuses consumed (settleLedger), with the same refusal on drift a whole
+ * request gets. Paying the last unpaid part is when the request is PROCESSED.
+ *
+ * Who may pay from which status is the caller's call, as for a whole request
+ * (PAYABLE / FINANCE_PAYABLE in app/payroll/finance/actions.ts); this only
+ * refuses a status nothing can be paid from.
+ */
+export async function payParts(opts: {
+  submissionId: string;
+  actorId: string;
+  departmentIds: ReadonlySet<string> | "all";
+}): Promise<
+  | ({ ok: true; paidOut: boolean } & PartsStep)
+  | { ok: false; reasons: string[] }
+> {
+  return prisma.$transaction(async (tx) => {
+    await lockSubmission(tx, opts.submissionId);
+    const sub = await tx.payrollSubmission.findUnique({
+      where: { id: opts.submissionId },
+      select: {
+        id: true,
+        status: true,
+        netTotal: true,
+        fineBatchId: true,
+        fineLines: true,
+        bonusLines: true,
+        parts: { orderBy: { position: "asc" }, select: PART_SELECT },
+      },
+    });
+    if (!sub) throw new Error("Request not found.");
+    if (sub.parts.length === 0) {
+      throw new Error("This request isn't split by department — pay it whole.");
+    }
+    if (!TRANSITIONS[sub.status].includes("PROCESSED")) {
+      throw new Error("Only a request awaiting payment can be processed.");
+    }
+    const inScope = (p: { departmentId: string | null }) =>
+      opts.departmentIds === "all" ||
+      (p.departmentId !== null && opts.departmentIds.has(p.departmentId));
+    const toPay = sub.parts.filter((p) => p.paidAt === null && inScope(p));
+    if (toPay.length === 0) {
+      throw new Error("Nothing on this request is left for you to pay — reload.");
+    }
+
+    const now = new Date();
+    let fineBatchId = sub.fineBatchId;
+    if (toPay.some((p) => p.carriesLedger)) {
+      const settled = await settleLedger(tx, sub, opts.actorId, now);
+      if (!settled.ok) return settled;
+      fineBatchId = settled.batchId;
+    }
+    const stamped = await tx.payrollPart.updateMany({
+      where: { id: { in: toPay.map((p) => p.id) }, paidAt: null },
+      data: { paidAt: now, paidById: opts.actorId },
+    });
+    if (stamped.count !== toPay.length) {
+      throw new Error("This request changed while you were acting — reload and try again.");
+    }
+
+    const acted = priced(toPay, sub.parts, sub.netTotal);
+    const remaining = priced(
+      sub.parts.filter((p) => p.paidAt === null && !toPay.includes(p)),
+      sub.parts,
+      sub.netTotal,
+    );
+    await applyTransition(tx, {
+      submissionId: sub.id,
+      from: sub.status,
+      to: sub.status,
+      actorId: opts.actorId,
+      partAction: "PAID",
+      note:
+        `Paid ${namesOf(acted)}.` +
+        (remaining.length > 0 ? ` Still to pay: ${namesOf(remaining)}.` : ""),
+      data: { fineBatchId },
+    });
+    if (remaining.length === 0) {
+      await applyTransition(tx, {
+        submissionId: sub.id,
+        from: sub.status,
+        to: "PROCESSED",
+        actorId: opts.actorId,
+        note: "Every department's part is paid.",
+        data: { processedAt: now, fineBatchId },
+      });
+    }
+    return { ok: true, paidOut: remaining.length === 0, acted, remaining };
+  });
+}
+
+/**
+ * Take back the payment of some parts — the ones in the payer's scope that
+ * are paid. A request that was fully paid goes back to waiting for payment
+ * first (exactly as unprocessSubmission returns a whole one); undoing the part
+ * that carries the ledger reverses its fine deductions and bonus stamps.
+ */
+export async function unpayParts(opts: {
+  submissionId: string;
+  actorId: string;
+  departmentIds: ReadonlySet<string> | "all";
+}): Promise<PartsStep> {
+  return prisma.$transaction(async (tx) => {
+    await lockSubmission(tx, opts.submissionId);
+    const sub = await tx.payrollSubmission.findUnique({
+      where: { id: opts.submissionId },
+      select: {
+        id: true,
+        status: true,
+        netTotal: true,
+        fineBatchId: true,
+        parts: { orderBy: { position: "asc" }, select: PART_SELECT },
+      },
+    });
+    if (!sub || sub.parts.length === 0) throw new Error("Request not found.");
+    const inScope = (p: { departmentId: string | null }) =>
+      opts.departmentIds === "all" ||
+      (p.departmentId !== null && opts.departmentIds.has(p.departmentId));
+    const toUndo = sub.parts.filter((p) => p.paidAt !== null && inScope(p));
+    if (toUndo.length === 0) {
+      throw new Error("None of this request was paid by your desk — reload.");
+    }
+
+    let status = sub.status;
+    if (status === "PROCESSED") {
+      const backTo = await statusPaidFrom(tx, sub.id);
+      await applyTransition(tx, {
+        submissionId: sub.id,
+        from: "PROCESSED",
+        to: backTo,
+        actorId: opts.actorId,
+        note: "Payment undone.",
+        data: { processedAt: null },
+      });
+      status = backTo;
+    }
+    const carrying = toUndo.some((p) => p.carriesLedger);
+    if (carrying) await reverseLedger(tx, sub);
+    await tx.payrollPart.updateMany({
+      where: { id: { in: toUndo.map((p) => p.id) } },
+      data: { paidAt: null, paidById: null },
+    });
+
+    const acted = priced(toUndo, sub.parts, sub.netTotal);
+    const remaining = priced(
+      sub.parts.filter((p) => p.paidAt === null || toUndo.includes(p)),
+      sub.parts,
+      sub.netTotal,
+    );
+    await applyTransition(tx, {
+      submissionId: sub.id,
+      from: status,
+      to: status,
+      actorId: opts.actorId,
+      partAction: "UNPAID",
+      note: `Payment of ${namesOf(acted)} undone.`,
+      data: carrying ? { fineBatchId: null } : undefined,
+    });
+    return { acted, remaining };
   });
 }
 

@@ -35,7 +35,15 @@ import {
   PAYROLL_STATUS_LABEL,
 } from "@/lib/payrollTypes";
 import { formatMoney } from "@/lib/penalties";
+import {
+  anyPartPaid,
+  filesSplit,
+  partAmount,
+  payDepartmentsFor,
+  splitLine,
+} from "@/lib/payrollParts";
 import { PayrollComingSoon } from "./_components/PayrollComingSoon";
+import { PART_VIEW_SELECT, partViews } from "./_components/partViews";
 import { PayrollForm } from "./_components/PayrollForm";
 import type { LedgerLineView } from "./_components/LedgerBreakdown";
 import { EditableSubmission } from "./_components/EditableSubmission";
@@ -155,11 +163,13 @@ export default async function PayrollPage() {
           id: true,
           fromStatus: true,
           toStatus: true,
+          partAction: true,
           note: true,
           createdAt: true,
           actor: { select: { name: true, email: true } },
         },
       },
+      parts: PART_VIEW_SELECT,
     },
   });
 
@@ -179,10 +189,34 @@ export default async function PayrollPage() {
   const latest = await prisma.payrollSubmission.findFirst({
     where: { userId: me.id },
     orderBy: { createdAt: "desc" },
-    select: { baseSalary: true, paymentMethod: true, paymentDetails: true },
+    select: {
+      baseSalary: true,
+      paymentMethod: true,
+      paymentDetails: true,
+      parts: { select: { departmentId: true, salary: true, carriesLedger: true } },
+    },
   });
+
+  // The departments that pay this person. Two or more and the form asks for a
+  // salary from each, and the request is split by department (PayrollPart).
+  const payDepartments = await payDepartmentsFor(prisma, me.id);
+  const formDepartments = filesSplit(payDepartments)
+    ? payDepartments.map((d) => ({ id: d.id, name: d.name }))
+    : undefined;
+  /** A filed request's split, as the form's starting values. */
+  const partsPrefill = (
+    parts: { departmentId: string | null; salary: number; carriesLedger: boolean }[],
+  ) => ({
+    salaries: Object.fromEntries(
+      parts.flatMap((p) => (p.departmentId ? [[p.departmentId, p.salary]] : [])),
+    ) as Record<string, number>,
+    ledgerDepartmentId:
+      parts.find((p) => p.carriesLedger)?.departmentId ?? null,
+  });
+
   const prefill = {
     baseSalary: latest?.baseSalary ?? null,
+    ...(latest ? { parts: partsPrefill(latest.parts) } : {}),
     // A first-time filer has no previous method to copy. The team is
     // Tashkent-based and most people are paid in cash there, so that is the
     // one that needs changing least often — and it is the value the old CASH
@@ -201,9 +235,11 @@ export default async function PayrollPage() {
   // Still in the queue (with the lead or finance), untouched by a reviewer, and
   // the window is still open. The review is the other bound: an admin acting on
   // it closes editing early, whatever the clock says.
+  // A department that has already paid its part freezes the request too.
   const canEdit =
     (current?.status === "SUBMITTED" || current?.status === "WITH_LEAD") &&
-    filingOpen;
+    filingOpen &&
+    !anyPartPaid(current.parts);
   const blocking = canFileFresh ? await inFlightSubmission(prisma, me.id) : null;
 
   const dateOf = (d: Date) => formatYmd(toYmd(d), period.year);
@@ -235,13 +271,49 @@ export default async function PayrollPage() {
       ? (current.events.findLast((e) => e.toStatus === "DECLINED")?.note ?? null)
       : null;
 
+  // Where each department's part stands, for the banners of a split request.
+  const partLines = current
+    ? current.parts.map((p) => ({
+        departmentName: p.departmentName,
+        amount: partAmount(p, current.parts, current.netTotal),
+        approved: p.approvedAt !== null,
+        paid: p.paidAt !== null,
+      }))
+    : [];
+  const listOf = (lines: { departmentName: string; amount: number }[]) =>
+    splitLine(lines, lines.map((l) => l.amount), formatMoney);
+  const splitBanner =
+    current && partLines.length > 0
+      ? current.status === "WITH_LEAD"
+        ? {
+            tone: "border-amber-200 bg-amber-50 text-amber-800",
+            text: `Split by department — each department's lead approves their own part.${
+              partLines.some((l) => l.approved)
+                ? ` Approved: ${listOf(partLines.filter((l) => l.approved))}.`
+                : ""
+            } Waiting on: ${listOf(partLines.filter((l) => !l.approved))}.`,
+          }
+        : (current.status === "SUBMITTED" || current.status === "APPROVED_BY_ADMIN") &&
+            partLines.some((l) => l.paid)
+          ? {
+              tone: "border-brand/30 bg-brand-soft text-brand",
+              text: `Partly paid — ${listOf(partLines.filter((l) => l.paid))} is paid. Still to come: ${listOf(partLines.filter((l) => !l.paid))}.`,
+            }
+          : current.status === "SUBMITTED"
+            ? {
+                tone: "border-brand/30 bg-brand-soft text-brand",
+                text: `Approved by every department. Each department's lead pays their own part (or finance does): ${listOf(partLines)}. You'll get a notification as each one arrives.`,
+              }
+            : null
+      : null;
+
   const view: SubmissionViewModel | null =
     current && !canResubmit
       ? {
           id: current.id,
           status: current.status,
-          banner:
-            current.status === "WITH_LEAD"
+          banner: splitBanner ??
+            (current.status === "WITH_LEAD"
               ? {
                   tone: "border-amber-200 bg-amber-50 text-amber-800",
                   text: `With your department lead for approval — finance sees it once they pass it on.${
@@ -276,7 +348,7 @@ export default async function PayrollPage() {
                         tone: "border-line bg-canvas text-muted-fg",
                         text: "The resubmit window lapsed. No penalty — file again in next month's cycle; anything unpaid rolls into that snapshot automatically.",
                       }
-                    : null,
+                    : null),
           baseSalary: current.baseSalary,
           bonusesTotal: current.bonusesTotal,
           finesTotal: current.finesTotal,
@@ -313,11 +385,18 @@ export default async function PayrollPage() {
           ),
           events: current.events.map((e) => ({
             id: e.id,
-            label: payrollEventLabel(e.fromStatus, e.toStatus),
+            label: payrollEventLabel(e.fromStatus, e.toStatus, e.partAction),
             actorName: e.actor ? (e.actor.name ?? e.actor.email ?? null) : null,
             dateLabel: formatDateTimeTz(e.createdAt),
             note: e.note,
           })),
+          parts: partViews(current.parts, current.netTotal, {
+            formatDate: formatDateTimeTz,
+          }),
+          statusLabel:
+            current.status !== "PROCESSED" && anyPartPaid(current.parts)
+              ? "Partly paid"
+              : undefined,
         }
       : null;
 
@@ -412,7 +491,9 @@ export default async function PayrollPage() {
               amountCents: e.amountCents,
               receiptName: e.receipt?.filename ?? null,
             })),
+            parts: partsPrefill(current.parts),
           }}
+          departments={formDepartments}
           mode={{
             kind: "refile",
             deadlineIso: current.resubmitDeadline?.toISOString() ?? null,
@@ -447,8 +528,10 @@ export default async function PayrollPage() {
                   amountCents: e.amountCents,
                   receiptName: e.receipt?.filename ?? null,
                 })),
+                parts: partsPrefill(current.parts),
               }}
               mode={{ kind: "edit" }}
+              departments={formDepartments}
             />
           }
         />
@@ -478,6 +561,7 @@ export default async function PayrollPage() {
           snapshot={snapshot}
           prefill={prefill}
           mode={{ kind: "file" }}
+          departments={formDepartments}
         />
       )}
 

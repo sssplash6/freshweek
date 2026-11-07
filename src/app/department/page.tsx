@@ -14,6 +14,12 @@ import { formatDateTimeTz } from "@/lib/dates";
 import { formatMoney } from "@/lib/penalties";
 import { ensureCurrentPeriod } from "@/lib/payroll";
 import { approvalScopeFor } from "@/lib/payrollApproval";
+import {
+  approvableDepartments,
+  ledDepartmentIds,
+  partAmount,
+  payableDepartments,
+} from "@/lib/payrollParts";
 import { isPayrollOpenFor, payrollPeriodLabel } from "@/lib/payrollTypes";
 import { BackLink } from "@/app/_components/BackLink";
 import { LeadRoster, type LeadDepartment } from "./_components/LeadRoster";
@@ -253,22 +259,67 @@ export default async function DepartmentPanelPage() {
         // countable set /payroll/team and the finance panel total.
         status: { notIn: ["DRAFT", "EXPIRED"] },
       },
-      select: { userId: true, status: true, netTotal: true },
+      select: {
+        userId: true,
+        status: true,
+        netTotal: true,
+        user: { select: { memberships: { select: { role: true, departmentId: true } } } },
+        parts: {
+          select: {
+            departmentId: true,
+            salary: true,
+            carriesLedger: true,
+            approvedAt: true,
+            paidAt: true,
+          },
+        },
+      },
     });
-    // The same two statuses /payroll/team and the finance panel treat as
-    // awaiting payment; a legacy APPROVED_BY_ADMIN row is payable like any
-    // other (PAYABLE in app/payroll/finance/actions.ts).
-    const payable = rows.filter(
-      (r) =>
-        (r.status === "SUBMITTED" || r.status === "APPROVED_BY_ADMIN") &&
-        r.userId !== userId, // a lead can't pay their own
-    );
+    // A request split by department (PayrollPart) is this lead's only in
+    // part — the same reading /payroll/team gives it: what their departments
+    // are asked for, whether THEIR part still needs approving, and what of it
+    // is left for them to pay.
+    const led = await ledDepartmentIds(prisma, userId);
+    const mine = rows.map((r) => {
+      const seats = r.user.memberships;
+      const priced = r.parts.map((p) => ({
+        ...p,
+        amount: partAmount(p, r.parts, r.netTotal),
+      }));
+      const approveScope = approvableDepartments(userId, led, r.userId, seats);
+      const payScope = payableDepartments(userId, led, r.userId, seats);
+      const inScope = (scope: ReadonlySet<string>) =>
+        priced.filter((p) => p.departmentId !== null && scope.has(p.departmentId));
+      const split = r.parts.length > 0;
+      const unpaidMine = inScope(payScope).filter((p) => p.paidAt === null);
+      return {
+        status: r.status,
+        share: split
+          ? inScope(approveScope).reduce((sum, p) => sum + p.amount, 0)
+          : r.netTotal,
+        needsMyApproval:
+          r.status === "WITH_LEAD" &&
+          (!split || inScope(approveScope).some((p) => p.approvedAt === null)),
+        // The same two statuses /payroll/team and the finance panel treat as
+        // awaiting payment; a legacy APPROVED_BY_ADMIN row is payable like any
+        // other (PAYABLE in app/payroll/finance/actions.ts).
+        toPay:
+          (r.status === "SUBMITTED" || r.status === "APPROVED_BY_ADMIN") &&
+          r.userId !== userId && // a lead can't pay their own
+          (!split || unpaidMine.length > 0)
+            ? split
+              ? unpaidMine.reduce((sum, p) => sum + p.amount, 0)
+              : r.netTotal
+            : null,
+      };
+    });
+    const payable = mine.filter((r) => r.toPay !== null);
     teamPayroll = {
       label: payrollPeriodLabel(period.year, period.month),
-      requested: rows.reduce((sum, r) => sum + r.netTotal, 0),
-      waiting: rows.filter((r) => r.status === "WITH_LEAD").length,
+      requested: mine.reduce((sum, r) => sum + r.share, 0),
+      waiting: mine.filter((r) => r.needsMyApproval).length,
       toPay: payable.length,
-      toPayTotal: payable.reduce((sum, r) => sum + r.netTotal, 0),
+      toPayTotal: payable.reduce((sum, r) => sum + (r.toPay ?? 0), 0),
       count: rows.length,
     };
   }

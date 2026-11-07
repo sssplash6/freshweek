@@ -4,7 +4,11 @@
 
 import { formatYmd, toYmd } from "@/lib/dates";
 import { PENALTY_LABEL, type PenaltyType } from "@/lib/penalties";
-import { payrollEventLabel, type PayrollStatus } from "@/lib/payrollTypes";
+import {
+  payrollEventLabel,
+  type PayrollPartAction,
+  type PayrollStatus,
+} from "@/lib/payrollTypes";
 import type { LedgerLineView } from "./LedgerBreakdown";
 import type { SubmissionEventView } from "./SubmissionView";
 
@@ -45,6 +49,7 @@ export function eventViews(
     id: string;
     fromStatus: PayrollStatus | null;
     toStatus: PayrollStatus;
+    partAction?: PayrollPartAction | null;
     note: string | null;
     createdAt: Date;
     actor: { name: string | null; email: string | null } | null;
@@ -53,7 +58,7 @@ export function eventViews(
 ): SubmissionEventView[] {
   return events.map((e) => ({
     id: e.id,
-    label: payrollEventLabel(e.fromStatus, e.toStatus),
+    label: payrollEventLabel(e.fromStatus, e.toStatus, e.partAction),
     actorName: e.actor ? (e.actor.name ?? e.actor.email ?? null) : null,
     dateLabel: formatDate(e.createdAt),
     note: e.note,

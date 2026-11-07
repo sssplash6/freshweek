@@ -11,6 +11,7 @@
 // it back rather than recomputing anything. No money is touched.
 
 import { prisma } from "@/lib/prisma";
+import { partAmount } from "@/lib/payrollParts";
 import { renderPayrollInvoice } from "@/lib/payrollPdf";
 import {
   parsePaymentDetails,
@@ -50,6 +51,10 @@ export async function regenerateInvoicePdf(
         orderBy: { position: "asc" },
         select: { label: true, amountCents: true },
       },
+      parts: {
+        orderBy: { position: "asc" },
+        select: { departmentName: true, salary: true, carriesLedger: true },
+      },
     },
   });
   if (!s) return;
@@ -82,6 +87,10 @@ export async function regenerateInvoicePdf(
     netTotal: s.netTotal,
     paymentMethod: s.paymentMethod,
     paymentDetails: parsePaymentDetails(s.paymentDetails),
+    parts: s.parts.map((p) => ({
+      ...p,
+      amount: partAmount(p, s.parts, s.netTotal),
+    })),
   });
 
   await db.payrollPdf.upsert({

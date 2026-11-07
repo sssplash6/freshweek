@@ -46,6 +46,17 @@ export type InvoiceData = {
   netTotal: number;
   paymentMethod: PayrollMethod;
   paymentDetails: PaymentDetails;
+  /**
+   * The department split, for someone paid by more than one (PayrollPart).
+   * Empty or absent for everyone else. `amount` is what that department pays
+   * (lib/payrollParts.ts partAmount) and the amounts add up to `netTotal`.
+   */
+  parts?: {
+    departmentName: string;
+    salary: number;
+    amount: number;
+    carriesLedger: boolean;
+  }[];
 };
 
 // ----- Page geometry (US Letter, like the sample) -----
@@ -215,8 +226,18 @@ export async function renderPayrollInvoice(
   const when = (d: Date) => formatYmd(toYmd(d));
   // Every row is in cents so the column adds up exactly; only the expenses
   // actually carry any.
+  // A split request lists each department's salary on its own line, so the
+  // invoice says who owes what; everyone else keeps the one line.
+  const parts = data.parts ?? [];
+  const salaryRows =
+    parts.length > 0
+      ? parts.map((p) => ({
+          label: `Base salary — ${data.periodLabel} (${p.departmentName})`,
+          amount: cents(p.salary),
+        }))
+      : [{ label: `Base salary — ${data.periodLabel}`, amount: cents(data.baseSalary) }];
   const rows: { label: string; amount: number }[] = [
-    { label: `Base salary — ${data.periodLabel}`, amount: cents(data.baseSalary) },
+    ...salaryRows,
     ...data.bonusLines.map((b) => ({
       label: `Bonus (${when(b.awardedAt)})${b.note ? ` — ${b.note}` : ""}`,
       amount: cents(b.amount),
@@ -277,6 +298,32 @@ export async function renderPayrollInvoice(
     y -= 20;
   }
   y -= 24;
+
+  // ----- Who pays which part (split requests only) -----
+  //
+  // Each department pays its own part, and the bonuses, fines and expenses
+  // come with exactly one of them — so the total alone doesn't tell either
+  // lead what to send. The parts add up to the Total above.
+  if (parts.length > 0) {
+    const splitLines = parts.map(
+      (p) =>
+        `${p.departmentName}: ${usd(cents(p.amount))}` +
+        (p.carriesLedger && parts.length > 1
+          ? " (salary, plus the bonuses, fines and expenses above)"
+          : ""),
+    );
+    ensureRoom(15 + splitLines.length * 14 + 10, false);
+    text("Paid by department:", MARGIN_X, y, { color: GRAY });
+    y -= 15;
+    for (const line of splitLines) {
+      for (const piece of wrap(font, line, 10, 400)) {
+        ensureRoom(14, false);
+        text(piece, MARGIN_X, y);
+        y -= 14;
+      }
+    }
+    y -= 14;
+  }
 
   // ----- Notes: how to pay this person -----
   //

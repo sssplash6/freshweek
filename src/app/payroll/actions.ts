@@ -20,6 +20,14 @@ import {
   reviewerUsers,
 } from "@/lib/payroll";
 import { approvingLeadsFor } from "@/lib/payrollApproval";
+import {
+  anyPartPaid,
+  filesSplit,
+  partAmount,
+  payDepartmentsFor,
+  splitLine,
+  type PayDepartment,
+} from "@/lib/payrollParts";
 import { renderPayrollInvoice } from "@/lib/payrollPdf";
 import { regenerateInvoicePdf } from "@/lib/payrollInvoice";
 import {
@@ -107,9 +115,28 @@ export async function submitPayroll(
 
   // ----- Parse & validate the form -----
 
-  const baseSalary = Math.round(Number(formData.get("baseSalary")));
-  if (!Number.isFinite(baseSalary) || baseSalary < 0 || baseSalary > MAX_PAYROLL_AMOUNT) {
-    return fail("Enter a valid base salary (whole dollars).");
+  // Someone in two or more departments is paid by each of them, so they file
+  // a salary per department and the request is split into parts that each
+  // department approves and pays on its own (lib/payrollParts.ts). Which
+  // departments those are is read HERE, from the seats, never from the form —
+  // the form only says how much each one pays.
+  const payDepartments = await payDepartmentsFor(prisma, userId);
+  const split = filesSplit(payDepartments);
+  let parts: ParsedPart[] = [];
+  let baseSalary: number;
+  if (split) {
+    const parsed = parseParts(formData, payDepartments);
+    if (typeof parsed === "string") return fail(parsed);
+    parts = parsed;
+    baseSalary = parts.reduce((sum, p) => sum + p.salary, 0);
+    if (baseSalary > MAX_PAYROLL_AMOUNT) {
+      return fail("Enter a valid base salary (whole dollars).");
+    }
+  } else {
+    baseSalary = Math.round(Number(formData.get("baseSalary")));
+    if (!Number.isFinite(baseSalary) || baseSalary < 0 || baseSalary > MAX_PAYROLL_AMOUNT) {
+      return fail("Enter a valid base salary (whole dollars).");
+    }
   }
 
   const rawMethod = formData.get("paymentMethod");
@@ -190,7 +217,12 @@ export async function submitPayroll(
 
   const existing = await prisma.payrollSubmission.findUnique({
     where: { userId_periodId: { userId, periodId: period.id } },
-    select: { id: true, status: true, resubmitDeadline: true },
+    select: {
+      id: true,
+      status: true,
+      resubmitDeadline: true,
+      parts: { select: { paidAt: true } },
+    },
   });
 
   // The filing window (last three days of the month plus the 1st of the next
@@ -264,6 +296,13 @@ export async function submitPayroll(
         `Filing for ${label} isn't open until ${formatTashkent(period.filingOpensAt)} — your request stays in review exactly as filed until then.`,
       );
     }
+    // One department has already paid its part. Rewriting the request now
+    // would change money that has left the building, so it stands as filed.
+    if (anyPartPaid(existing.parts)) {
+      return fail(
+        `Part of your ${label} request is already paid, so it can't be changed now. If something is wrong, tell finance.`,
+      );
+    }
     mode = "edit";
   } else {
     return fail(
@@ -289,12 +328,44 @@ export async function submitPayroll(
    * read later as a gate that was skipped.
    */
   const leads = await approvingLeadsFor(prisma, userId);
-  const landsOn: "WITH_LEAD" | "SUBMITTED" =
-    leads.length > 0 ? "WITH_LEAD" : "SUBMITTED";
-  const skipNote =
-    landsOn === "SUBMITTED"
+  // A split request waits on the lead of each department it has a part in.
+  // A department with no lead has nobody to wait on, so its part starts out
+  // approved — the whole-request rule below, one department at a time.
+  const approverIdsOf = new Map(payDepartments.map((d) => [d.id, d.approverIds]));
+  const unapproved = parts.filter(
+    (p) => (approverIdsOf.get(p.departmentId) ?? []).length > 0,
+  );
+  const landsOn: "WITH_LEAD" | "SUBMITTED" = split
+    ? unapproved.length > 0
+      ? "WITH_LEAD"
+      : "SUBMITTED"
+    : leads.length > 0
+      ? "WITH_LEAD"
+      : "SUBMITTED";
+  const leaderless = parts.filter((p) => !unapproved.includes(p));
+  const skipNote = split
+    ? landsOn === "SUBMITTED"
+      ? "No department lead to approve any part of this — filed straight to finance."
+      : leaderless.length > 0
+        ? `No lead in ${leaderless.map((p) => p.departmentName).join(" or ")} — that part needs no approval.`
+        : null
+    : landsOn === "SUBMITTED"
       ? "No department lead to approve this — filed straight to finance."
       : null;
+  // Who is waiting on whom, for the hand-off below: each lead hears about the
+  // part (or parts) that are theirs to approve, not the whole request.
+  const partsByApprover = new Map<string, ParsedPart[]>();
+  for (const p of unapproved) {
+    for (const id of approverIdsOf.get(p.departmentId) ?? []) {
+      partsByApprover.set(id, [...(partsByApprover.get(id) ?? []), p]);
+    }
+  }
+  const approverUsers = split
+    ? await prisma.user.findMany({
+        where: { id: { in: [...partsByApprover.keys()] } },
+        select: { id: true, email: true },
+      })
+    : [];
 
   // ----- Write it all atomically -----
 
@@ -352,6 +423,14 @@ export async function submitPayroll(
           `Your outstanding fines (${formatMoney(snapshot.finesTotal)}) exceed the rest of this request — the total can't go below zero.`,
         );
       }
+      // The fines come off ONE department's payment, so that part has to be
+      // big enough to take them, not just the request as a whole.
+      const carrying = parts.find((p) => p.carriesLedger);
+      if (carrying && partAmount(carrying, parts, netTotal) < 0) {
+        throw new SubmitError(
+          `Your outstanding fines (${formatMoney(snapshot.finesTotal)}) are more than your ${carrying.departmentName} part — put bonuses, fines and expenses on a department with a bigger share.`,
+        );
+      }
 
       const money = {
         baseSalary,
@@ -402,6 +481,26 @@ export async function submitPayroll(
           actorId: userId,
           note: skipNote,
           data: { lastSubmittedAt: now },
+        });
+      }
+
+      // The department parts, rebuilt from scratch on every filing: an edit or
+      // a refile changes the numbers each lead would be vouching for, so no
+      // approval carries over (the same reason the whole request goes back to
+      // WITH_LEAD). Paid parts can't reach here — an edit is refused above and
+      // a request with a paid part can't be declined.
+      await tx.payrollPart.deleteMany({ where: { submissionId } });
+      if (parts.length > 0) {
+        await tx.payrollPart.createMany({
+          data: parts.map((p, i) => ({
+            submissionId,
+            departmentId: p.departmentId,
+            departmentName: p.departmentName,
+            salary: p.salary,
+            carriesLedger: p.carriesLedger,
+            position: i + 1,
+            ...(unapproved.includes(p) ? {} : { approvedAt: now }),
+          })),
         });
       }
 
@@ -493,6 +592,12 @@ export async function submitPayroll(
         netTotal,
         paymentMethod: method,
         paymentDetails: details,
+        parts: parts.map((p) => ({
+          departmentName: p.departmentName,
+          salary: p.salary,
+          amount: partAmount(p, parts, netTotal),
+          carriesLedger: p.carriesLedger,
+        })),
       });
       await tx.payrollPdf.upsert({
         where: { submissionId },
@@ -503,18 +608,34 @@ export async function submitPayroll(
       // Told to the desk it actually landed on — nobody is paged about a
       // request that isn't theirs to act on yet. Finance hears about it when
       // the lead passes it (approveAsLead in ./team/actions.ts).
-      const audience =
-        landsOn === "WITH_LEAD"
-          ? leads.map((l) => l.id)
-          : (await reviewerUsers(tx, financeEmails())).map((r) => r.id);
-      await notify(
-        tx,
-        audience.filter((id) => id !== userId),
-        "PAYROLL",
-        landsOn === "WITH_LEAD"
-          ? `${me.name ?? me.email}: ${label} pay request ${NOTICE[mode].verb} — ${formatMoney(netTotal)} net. Needs your approval before finance can pay it.`
-          : `${me.name ?? me.email}: ${label} pay request ${NOTICE[mode].verb} — ${formatMoney(netTotal)} net.`,
-      );
+      if (split && landsOn === "WITH_LEAD") {
+        // Each lead is told what is theirs: the part of THEIR department, and
+        // that the rest is another lead's.
+        for (const [leadId, theirs] of partsByApprover) {
+          if (leadId === userId) continue;
+          await notify(
+            tx,
+            leadId,
+            "PAYROLL",
+            `${me.name ?? me.email}: ${label} pay request ${NOTICE[mode].verb} — ${splitOf(theirs, parts, netTotal)} is your department's part. Needs your approval before it can be paid.`,
+          );
+        }
+      } else {
+        const audience =
+          landsOn === "WITH_LEAD"
+            ? leads.map((l) => l.id)
+            : (await reviewerUsers(tx, financeEmails())).map((r) => r.id);
+        await notify(
+          tx,
+          audience.filter((id) => id !== userId),
+          "PAYROLL",
+          landsOn === "WITH_LEAD"
+            ? `${me.name ?? me.email}: ${label} pay request ${NOTICE[mode].verb} — ${formatMoney(netTotal)} net. Needs your approval before finance can pay it.`
+            : `${me.name ?? me.email}: ${label} pay request ${NOTICE[mode].verb} — ${formatMoney(netTotal)} net${
+                split ? ` (${splitOf(parts, parts, netTotal)})` : ""
+              }.`,
+        );
+      }
     });
   } catch (e) {
     if (e instanceof SubmitError) return fail(e.message);
@@ -538,33 +659,57 @@ export async function submitPayroll(
     where: { submission: { userId, periodId: period.id } },
     select: { bytes: true },
   });
-  const recipients =
-    landsOn === "WITH_LEAD"
-      ? leads.map((l) => l.email).filter((to): to is string => !!to)
-      : financeEmails();
-  await Promise.all(
-    recipients
-      .filter((to) => to.toLowerCase() !== (me.email ?? "").toLowerCase())
-      .map((to) =>
-        sendEmail({
-          to,
-          subject:
-            landsOn === "WITH_LEAD"
-              ? `Payroll: ${who} ${NOTICE[mode].subject(label)} — ${formatMoney(netTotal)} to approve`
-              : `Payroll: ${who} ${NOTICE[mode].subject(label)} — ${formatMoney(netTotal)} to pay`,
-          text:
-            landsOn === "WITH_LEAD"
-              ? `${who} ${NOTICE[mode].sentence(label)} — ${formatMoney(netTotal)} net.\n\n` +
-                `You lead their department, so it waits on you: finance can't pay it until you approve it. ` +
-                `The invoice is attached.\n\nApprove it, or send it back with a note: ${appUrl()}/payroll/team\n\n— FreshWeek`
-              : `${who} ${NOTICE[mode].sentence(label)} — ${formatMoney(netTotal)} net.\n\n` +
-                `The invoice is attached. Pay it, or decline it back with a note: ${appUrl()}/payroll/panel\n\n— FreshWeek`,
-          attachments: pdf
-            ? [{ filename: `${who} — ${label}.pdf`, bytes: pdf.bytes }]
-            : undefined,
+  const attachments = pdf
+    ? [{ filename: `${who} — ${label}.pdf`, bytes: pdf.bytes }]
+    : undefined;
+  if (split && landsOn === "WITH_LEAD") {
+    // One email per lead, about their own department's part.
+    await Promise.all(
+      approverUsers
+        .filter((u) => u.id !== userId && u.email)
+        .map((u) => {
+          const theirs = splitOf(partsByApprover.get(u.id) ?? [], parts, netTotal);
+          return sendEmail({
+            to: u.email!,
+            subject: `Payroll: ${who} ${NOTICE[mode].subject(label)} — ${theirs} to approve`,
+            text:
+              `${who} ${NOTICE[mode].sentence(label)} — ${formatMoney(netTotal)} in all, split by department: ` +
+              `${splitOf(parts, parts, netTotal)}.\n\n` +
+              `${theirs} is your department's part, so that part waits on you; the rest is for the other department's lead. ` +
+              `The invoice is attached.\n\nApprove your part, or send the request back with a note: ${appUrl()}/payroll/team\n\n— FreshWeek`,
+            attachments,
+          });
         }),
-      ),
-  );
+    );
+  } else {
+    const recipients =
+      landsOn === "WITH_LEAD"
+        ? leads.map((l) => l.email).filter((to): to is string => !!to)
+        : financeEmails();
+    await Promise.all(
+      recipients
+        .filter((to) => to.toLowerCase() !== (me.email ?? "").toLowerCase())
+        .map((to) =>
+          sendEmail({
+            to,
+            subject:
+              landsOn === "WITH_LEAD"
+                ? `Payroll: ${who} ${NOTICE[mode].subject(label)} — ${formatMoney(netTotal)} to approve`
+                : `Payroll: ${who} ${NOTICE[mode].subject(label)} — ${formatMoney(netTotal)} to pay`,
+            text:
+              landsOn === "WITH_LEAD"
+                ? `${who} ${NOTICE[mode].sentence(label)} — ${formatMoney(netTotal)} net.\n\n` +
+                  `You lead their department, so it waits on you: finance can't pay it until you approve it. ` +
+                  `The invoice is attached.\n\nApprove it, or send it back with a note: ${appUrl()}/payroll/team\n\n— FreshWeek`
+                : `${who} ${NOTICE[mode].sentence(label)} — ${formatMoney(netTotal)} net${
+                    split ? `, split by department: ${splitOf(parts, parts, netTotal)}` : ""
+                  }.\n\n` +
+                  `The invoice is attached. Pay it, or decline it back with a note: ${appUrl()}/payroll/panel\n\n— FreshWeek`,
+            attachments,
+          }),
+        ),
+    );
+  }
 
   revalidatePath("/payroll");
   revalidatePath("/payroll/panel");
@@ -599,6 +744,81 @@ const NOTICE = {
 
 /** An expected, user-facing refusal thrown from inside the transaction. */
 class SubmitError extends Error {}
+
+/** One department's share, as filed. */
+type ParsedPart = {
+  departmentId: string;
+  departmentName: string;
+  salary: number;
+  carriesLedger: boolean;
+};
+
+/**
+ * Read a split filing's parts: a `parts` JSON array of
+ * `{ departmentId, salary }`, one per department the filer sits in, and
+ * `ledgerDepartmentId`, the department the bonuses, fines and expenses go with.
+ *
+ * The departments are checked against the filer's seats as they are NOW, and
+ * every one of them must be answered: a form opened before a seat was added or
+ * removed is refused rather than filed against a split nobody chose. A
+ * department paying $0 this month is dropped — there is nothing for its lead
+ * to approve or pay — unless it carries the ledger, which can be all a part is
+ * (an expenses-only month).
+ *
+ * Returns the parts in department order, or the message to show.
+ */
+function parseParts(
+  formData: FormData,
+  departments: PayDepartment[],
+): ParsedPart[] | string {
+  let raw: unknown;
+  try {
+    raw = JSON.parse(String(formData.get("parts") ?? "[]"));
+  } catch {
+    return "Couldn't read your salaries — reload and try again.";
+  }
+  if (!Array.isArray(raw)) {
+    return "Couldn't read your salaries — reload and try again.";
+  }
+  const stale = "Your departments changed since this page opened — reload it and fill in each salary again.";
+  const salaryOf = new Map<string, number>();
+  for (const entry of raw as { departmentId?: unknown; salary?: unknown }[]) {
+    const dept = departments.find((d) => d.id === entry?.departmentId);
+    if (!dept || salaryOf.has(dept.id)) return stale;
+    const text = String(entry.salary ?? "").trim();
+    if (!/^\d+$/.test(text) || Number(text) > MAX_PAYROLL_AMOUNT) {
+      return `Enter your salary from ${dept.name} in whole dollars — 0 if they pay you nothing this month.`;
+    }
+    salaryOf.set(dept.id, Number(text));
+  }
+  if (salaryOf.size !== departments.length) return stale;
+
+  const ledgerId = String(formData.get("ledgerDepartmentId") ?? "");
+  if (!departments.some((d) => d.id === ledgerId)) {
+    return "Pick which department your bonuses, fines and expenses go with.";
+  }
+  return departments
+    .map((d) => ({
+      departmentId: d.id,
+      departmentName: d.name,
+      salary: salaryOf.get(d.id)!,
+      carriesLedger: d.id === ledgerId,
+    }))
+    .filter((p) => p.salary > 0 || p.carriesLedger);
+}
+
+/** "Research $400 · Global Admissions $600" for some of a request's parts. */
+function splitOf(
+  some: ParsedPart[],
+  all: ParsedPart[],
+  netTotal: number,
+): string {
+  return splitLine(
+    some,
+    some.map((p) => partAmount(p, all, netTotal)),
+    formatMoney,
+  );
+}
 
 /**
  * Namespace for the per-user payroll advisory lock, so it can't collide with

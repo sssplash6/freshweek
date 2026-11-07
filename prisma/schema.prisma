@@ -47,6 +47,10 @@ model Department {
   // Sign-ups who named this department on /pending but aren't approved yet.
   // Not members of it — see User.requestedDepartmentId.
   signupRequests User[] @relation("SignupRequests")
+
+  // Its share of pay requests filed by people who work in it AND another
+  // department (see PayrollPart).
+  payrollParts PayrollPart[]
 }
 
 // One person's seat in one department, with the hat they wear there. A user
@@ -148,6 +152,8 @@ model User {
   marketingTasksSet   MarketingTask[] @relation("MarketingTasksSet")
   payrollSubmissions PayrollSubmission[]
   payrollEvents      PayrollEvent[] @relation("PayrollEventsActed")
+  payrollPartsApproved PayrollPart[] @relation("PayrollPartsApproved")
+  payrollPartsPaid     PayrollPart[] @relation("PayrollPartsPaid")
 
   reportsFiled    ColleagueReport[] @relation("ReportsFiled")
   reportsClosed   ColleagueReport[] @relation("ReportsClosed")
@@ -990,6 +996,9 @@ model PayrollSubmission {
   events         PayrollEvent[]
   pdf            PayrollPdf?
   bonusesPaidOut Bonus[]            @relation("BonusesPaidOut")
+  // One row per department when the filer works in more than one; none at
+  // all otherwise (see PayrollPart).
+  parts          PayrollPart[]
 
   @@unique([userId, periodId])
   @@index([periodId, status])
@@ -1049,6 +1058,61 @@ model PayrollExpense {
   @@index([submissionId])
 }
 
+// One department's share of a pay request, for someone who works in more than
+// one department. Each department approves and pays ITS part; the request is
+// paid out only when every part is.
+//
+// Before this, a person in two departments filed one salary figure (with a "+"
+// to add the second department's), either lead's approval passed the whole
+// thing on, and the first lead to confirm payment marked ALL of it paid — so
+// a department that had only paid its own half closed the other's too, and
+// the other lead was left with nothing to act on.
+//
+// Parts exist only for those filers: someone in one department has none, and
+// every path that reads them falls back to the request as a whole. The
+// salaries add up to the request's baseSalary. Bonuses, fines and expenses
+// ride on exactly one part (`carriesLedger`) — a fine is deducted once, from
+// one department's payment, and the filer picks which. So a part's amount is
+// its salary, plus, on the carrying part, everything else in the request; the
+// amounts add up to netTotal exactly (lib/payrollParts.ts partAmounts).
+//
+// `departmentName` is a copy, like the snapshot lines: a request already paid
+// has to keep saying which department paid it after a rename or a delete.
+model PayrollPart {
+  id             String  @id @default(cuid())
+  submissionId   String
+  departmentId   String?
+  departmentName String
+  salary         Int // whole USD — this department's share of baseSalary
+  carriesLedger  Boolean @default(false)
+  position       Int
+
+  // Approval by the lead of THIS department (or the filer, for a department
+  // they lead themselves). Cleared on every refile or edit, because the
+  // numbers it vouched for have changed.
+  approvedAt   DateTime?
+  approvedById String?
+  // The payment of this part alone. The carrying part's payment is also when
+  // the fines are deducted and the bonuses consumed (lib/payroll.ts payPart).
+  paidAt       DateTime?
+  paidById     String?
+
+  submission PayrollSubmission @relation(fields: [submissionId], references: [id], onDelete: Cascade)
+  department Department?       @relation(fields: [departmentId], references: [id], onDelete: SetNull)
+  approvedBy User?             @relation("PayrollPartsApproved", fields: [approvedById], references: [id], onDelete: SetNull)
+  paidBy     User?             @relation("PayrollPartsPaid", fields: [paidById], references: [id], onDelete: SetNull)
+
+  @@unique([submissionId, departmentId])
+  @@index([departmentId])
+}
+
+// What a part-level event did (PayrollEvent.partAction).
+enum PayrollPartAction {
+  APPROVED
+  PAID
+  UNPAID
+}
+
 // Receipt file for one expense, stored in Postgres — Render's filesystem is
 // ephemeral, so bytes never touch disk. Size/type are capped at upload
 // (lib/payrollTypes.ts). Fetched only by the download route, never in lists.
@@ -1088,6 +1152,11 @@ model PayrollEvent {
   fromStatus   PayrollStatus?
   toStatus     PayrollStatus
   note         String?
+  // Set when the event is about ONE department's part of a split request
+  // rather than the request as a whole. Those land as a status self-edge (the
+  // request hasn't moved), so without this the trail would read a part being
+  // approved or paid as "Edited and resent".
+  partAction   PayrollPartAction?
   createdAt    DateTime       @default(now())
 
   submission PayrollSubmission @relation(fields: [submissionId], references: [id], onDelete: Cascade)

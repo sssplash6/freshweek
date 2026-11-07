@@ -29,10 +29,16 @@ export function LeadRow({
   submissionId,
   summary,
   children,
+  approveLabel,
 }: {
   submissionId: string;
   summary: PanelRowSummary;
   children: ReactNode;
+  /**
+   * "Approve Research Institute $400" on a request split by department, where
+   * this lead approves their own department's part and not the rest.
+   */
+  approveLabel?: string;
 }) {
   const [sendingBack, setSendingBack] = useState(false);
   const [note, setNote] = useState("");
@@ -83,7 +89,9 @@ export function LeadRow({
               onClick={approve}
               className="rounded-lg bg-brand px-3.5 py-2 text-sm font-semibold text-white transition hover:bg-brand-dark disabled:cursor-not-allowed disabled:opacity-50"
             >
-              {isPending && !sendingBack ? "Approving…" : "Approve for finance"}
+              {isPending && !sendingBack
+                ? "Approving…"
+                : (approveLabel ?? "Approve for finance")}
             </button>
             <button
               type="button"

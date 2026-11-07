@@ -33,10 +33,16 @@ export function SettleRow({
   submissionId,
   summary,
   children,
+  part,
 }: {
   submissionId: string;
   summary: PanelRowSummary;
   children: ReactNode;
+  /**
+   * On a request split by department: the part(s) this lead pays, e.g.
+   * "Research Institute $400". Confirming settles those and nothing else.
+   */
+  part?: string;
 }) {
   const [error, setError] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
@@ -67,11 +73,16 @@ export function SettleRow({
             onClick={confirm}
             className="rounded-lg bg-brand px-3.5 py-2 text-sm font-semibold text-white transition hover:bg-brand-dark disabled:cursor-not-allowed disabled:opacity-50"
           >
-            {isPending ? "Confirming…" : "Confirm payment"}
+            {isPending
+              ? "Confirming…"
+              : part
+                ? `Confirm ${part} paid`
+                : "Confirm payment"}
           </button>
           <p className="min-w-0 flex-1 text-xs text-muted-fg">
-            Once they have the money: this records the fine deductions, marks
-            the bonuses paid out, and emails them the final invoice.
+            {part
+              ? "Once they have your department's part: this records it as paid. The request is paid out when every department has paid its part."
+              : "Once they have the money: this records the fine deductions, marks the bonuses paid out, and emails them the final invoice."}
           </p>
           {error && <p className="text-xs text-red-600">{error}</p>}
         </div>
@@ -91,10 +102,13 @@ export function PaidRow({
   submissionId,
   summary,
   children,
+  part,
 }: {
   submissionId: string;
   summary: PanelRowSummary;
   children: ReactNode;
+  /** On a split request: the part(s) this lead paid, which undo takes back. */
+  part?: string;
 }) {
   const [asking, setAsking] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -126,7 +140,11 @@ export function PaidRow({
                 onClick={undo}
                 className="rounded-lg bg-red-600 px-3.5 py-2 text-sm font-semibold text-white transition hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-50"
               >
-                {isPending ? "Undoing…" : "Yes, undo payment"}
+                {isPending
+                  ? "Undoing…"
+                  : part
+                    ? `Yes, undo ${part}`
+                    : "Yes, undo payment"}
               </button>
               <button
                 type="button"
@@ -137,8 +155,9 @@ export function PaidRow({
                 Cancel
               </button>
               <p className="min-w-0 flex-1 text-xs text-muted-fg">
-                Puts it back to waiting for payment and reverses the fine
-                deductions it recorded.
+                {part
+                  ? "Puts your department's part back to waiting for payment, and reverses any fine deductions it recorded."
+                  : "Puts it back to waiting for payment and reverses the fine deductions it recorded."}
               </p>
             </>
           ) : (
@@ -147,7 +166,7 @@ export function PaidRow({
               onClick={() => setAsking(true)}
               className="rounded-lg border border-line px-3.5 py-2 text-sm font-medium text-muted-fg transition hover:text-ink"
             >
-              Undo payment
+              {part ? `Undo ${part} payment` : "Undo payment"}
             </button>
           )}
           {error && <p className="text-xs text-red-600">{error}</p>}

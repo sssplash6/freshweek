@@ -58,6 +58,8 @@ import {
 } from "../_components/PanelRowShell";
 import { PanelSummary, type PanelStat } from "../_components/PanelSummary";
 import { SubmissionDetail } from "../_components/SubmissionDetail";
+import { PART_VIEW_SELECT, partViews } from "../_components/partViews";
+import { partAmount, splitLine } from "@/lib/payrollParts";
 import { FinanceRow } from "./FinanceRow";
 // The two ways to read the same month, shared with the three redirects that
 // land here so they cannot name a view this page does not have.
@@ -333,11 +335,13 @@ export default async function PayrollPanelPage({
           id: true,
           fromStatus: true,
           toStatus: true,
+          partAction: true,
           note: true,
           createdAt: true,
           actor: { select: { name: true, email: true } },
         },
       },
+      parts: PART_VIEW_SELECT,
     },
   });
 
@@ -353,9 +357,21 @@ export default async function PayrollPanelPage({
   const toPay = submissions.filter((s) => AWAITING.includes(s.status));
   const paid = submissions.filter((s) => s.status === "PROCESSED");
   const countable = submissions.filter((s) => COUNTABLE.includes(s.status));
-  const toPayTotal = toPay.reduce((s, x) => s + x.netTotal, 0);
+  /**
+   * How much of a request split by department has already gone out while the
+   * rest waits (PayrollPart). It counts as paid, not as still to pay — or a
+   * request one department has settled would read as wholly owed.
+   */
+  const paidSoFar = (s: PanelSubmission) =>
+    s.status === "PROCESSED"
+      ? 0
+      : s.parts
+          .filter((p) => p.paidAt !== null)
+          .reduce((sum, p) => sum + partAmount(p, s.parts, s.netTotal), 0);
+  const partlyPaidTotal = toPay.reduce((s, x) => s + paidSoFar(x), 0);
+  const toPayTotal = toPay.reduce((s, x) => s + x.netTotal, 0) - partlyPaidTotal;
   const toPaySources = new Set(toPay.map((s) => s.paymentMethod)).size;
-  const paidTotal = paid.reduce((s, x) => s + x.netTotal, 0);
+  const paidTotal = paid.reduce((s, x) => s + x.netTotal, 0) + partlyPaidTotal;
   const monthTotal = countable.reduce((s, x) => s + x.netTotal, 0);
 
   /**
@@ -454,8 +470,22 @@ export default async function PayrollPanelPage({
           ? handedOver
           : null;
 
+    // A split request is approved and paid a department at a time; say which
+    // department it is waiting on rather than "their lead".
+    const priced = s.parts.map((p) => ({
+      ...p,
+      amount: partAmount(p, s.parts, s.netTotal),
+    }));
+    const line = (parts: typeof priced) =>
+      splitLine(parts, parts.map((p) => p.amount), formatMoney);
+    const paidOut = paidSoFar(s);
+    const partlyPaid = paidOut > 0;
     const metaLine =
-      s.status === "WITH_LEAD"
+      s.status === "WITH_LEAD" && priced.length > 0
+        ? `${s.lastSubmittedAt ? `Filed ${formatDateTimeTz(s.lastSubmittedAt)} · ` : ""}waiting on the lead of ${line(priced.filter((p) => p.approvedAt === null))}`
+        : partlyPaid
+        ? `${line(priced.filter((p) => p.paidAt === null))} still to pay`
+        : s.status === "WITH_LEAD"
         ? `${s.lastSubmittedAt ? `Filed ${formatDateTimeTz(s.lastSubmittedAt)} · ` : ""}waiting on their department lead`
         : s.status === "DECLINED" && s.resubmitDeadline
         ? `Resubmit by ${formatTashkent(s.resubmitDeadline)}${s.graceDayUsed ? " · grace day" : ""}`
@@ -489,7 +519,7 @@ export default async function PayrollPanelPage({
       metaLine,
       netLabel: formatMoney(s.netTotal),
       flags,
-      statusLabel: PAYROLL_STATUS_LABEL[s.status],
+      statusLabel: partlyPaid ? "Partly paid" : PAYROLL_STATUS_LABEL[s.status],
       statusBadge: PAYROLL_STATUS_BADGE[s.status],
       sourceLabel: PAYROLL_METHOD_LABEL[s.paymentMethod],
     };
@@ -517,6 +547,8 @@ export default async function PayrollPanelPage({
             parsePaymentDetails(s.paymentDetails),
           ),
           events: eventViews(s.events, formatDateTimeTz),
+          parts: partViews(s.parts, s.netTotal, { formatDate: formatDateTimeTz }),
+          partsLive: s.status !== "DECLINED" && s.status !== "EXPIRED",
         }}
       />
     );
@@ -539,10 +571,20 @@ export default async function PayrollPanelPage({
         // — the same establishment the Confirm button rests on. A ledger-bound
         // line carries its own note so the reviewer edits a line they can
         // recognise rather than an id.
+        // Not on a split request one department has already paid: its figures
+        // are what that payment was made against (editSubmissionAsFinance).
         edit={
-          payable
+          payable && !partlyPaid
             ? {
                 baseSalary: s.baseSalary,
+                // A split request is revised a department at a time, and not
+                // at all once one department has paid (editSubmissionAsFinance).
+                parts: s.parts.map((p) => ({
+                  id: p.id,
+                  departmentName: p.departmentName,
+                  salary: p.salary,
+                  carriesLedger: p.carriesLedger,
+                })),
                 bonusLines: s.bonusLines.map((l) => ({
                   id: l.id,
                   label: l.note ?? "Bonus",
@@ -579,9 +621,10 @@ export default async function PayrollPanelPage({
       name: summary.name,
       departments: s.user.memberships.map((m) => m.department.name),
       status: s.status,
-      statusLabel: PAYROLL_STATUS_LABEL[s.status],
+      statusLabel: partlyPaid ? "Partly paid" : PAYROLL_STATUS_LABEL[s.status],
       method: s.paymentMethod,
       net: s.netTotal,
+      paidNet: paidOut,
       waitingSince: waitingSince?.getTime() ?? null,
       periodKey,
       periodLabel: label,

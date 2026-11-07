@@ -610,6 +610,44 @@ export function roundingCents(t: PayrollTotals): number {
   return computeNet(t) * 100 - netTotalCents(t);
 }
 
+// ----- A request split by department (PayrollPart) -----
+
+export type PartMoney = { salary: number; carriesLedger: boolean };
+
+/**
+ * What one part pays out. A part that doesn't carry the ledger is its salary
+ * and nothing else; the carrying part is everything the others aren't — its
+ * salary plus the request's bonuses and expenses, less its fines, with the
+ * whole request's rounding. Computed that way round on purpose: the amounts
+ * then add up to `netTotal` to the dollar, whatever the rounding did, so no
+ * page can show parts that disagree with the total.
+ */
+export function partAmount(
+  part: PartMoney,
+  parts: readonly PartMoney[],
+  netTotal: number,
+): number {
+  if (!part.carriesLedger) return part.salary;
+  const others = parts
+    .filter((p) => !p.carriesLedger)
+    .reduce((sum, p) => sum + p.salary, 0);
+  return netTotal - others;
+}
+
+/**
+ * "Global Admissions $600 · Research $400" — the one-line split, for metas,
+ * notifications and emails. `amounts` must be in the same order as `parts`.
+ */
+export function splitLine(
+  parts: readonly { departmentName: string }[],
+  amounts: readonly number[],
+  format: (n: number) => string,
+): string {
+  return parts
+    .map((p, i) => `${p.departmentName} ${format(amounts[i])}`)
+    .join(" · ");
+}
+
 /**
  * The breakdown every surface shows — the form's live preview, the filer's own
  * request, the reviewer's panel — so all three read the same and the rounding
@@ -716,6 +754,15 @@ export const PAYROLL_STATUS_BADGE: Record<PayrollStatus, string> = {
   PROCESSED: "bg-green-50 text-green-700",
 };
 
+export type PayrollPartAction = "APPROVED" | "PAID" | "UNPAID";
+
+/** History labels for events about one department's part (PayrollEvent.partAction). */
+export const PAYROLL_PART_EVENT_LABEL: Record<PayrollPartAction, string> = {
+  APPROVED: "Department part approved",
+  PAID: "Department part paid",
+  UNPAID: "Department part payment undone",
+};
+
 /**
  * One audit-trail row's verb, disambiguated by where it came from — the same
  * arrival reads differently depending on the desk it came from, and a trail
@@ -727,7 +774,12 @@ export const PAYROLL_STATUS_BADGE: Record<PayrollStatus, string> = {
 export function payrollEventLabel(
   from: PayrollStatus | null,
   to: PayrollStatus,
+  partAction?: PayrollPartAction | null,
 ): string {
+  // An event about one department's part of a split request. The request
+  // itself didn't move (from === to), so the status pair alone would read it
+  // as an edit; the note on the event names the department and the amount.
+  if (partAction) return PAYROLL_PART_EVENT_LABEL[partAction];
   if (to === "WITH_LEAD") {
     if (from === "DECLINED") return "Resubmitted — with the lead";
     if (from === "WITH_LEAD") return "Edited and resent";

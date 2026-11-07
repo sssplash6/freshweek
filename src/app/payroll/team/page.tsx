@@ -15,6 +15,13 @@ import {
 } from "@/lib/payroll";
 import { approvalScopeFor } from "@/lib/payrollApproval";
 import {
+  approvableDepartments,
+  ledDepartmentIds,
+  partAmount,
+  payableDepartments,
+  splitLine,
+} from "@/lib/payrollParts";
+import {
   formatCents,
   parsePaymentDetails,
   paymentDetailLines,
@@ -41,6 +48,7 @@ import {
   type PayableRow,
 } from "../_components/PaySelection";
 import { SubmissionDetail } from "../_components/SubmissionDetail";
+import { PART_VIEW_SELECT, partViews } from "../_components/partViews";
 import { LeadRow } from "./LeadRow";
 import { PaidRow, SettleRow } from "./SettleRow";
 
@@ -148,7 +156,11 @@ export default async function TeamPayrollPage({
           email: true,
           avatar: true,
           memberships: {
-            select: { role: true, department: { select: { name: true } } },
+            select: {
+              role: true,
+              departmentId: true,
+              department: { select: { name: true } },
+            },
           },
         },
       },
@@ -175,36 +187,91 @@ export default async function TeamPayrollPage({
           id: true,
           fromStatus: true,
           toStatus: true,
+          partAction: true,
           note: true,
           createdAt: true,
           actor: { select: { name: true, email: true } },
         },
       },
+      parts: PART_VIEW_SELECT,
     },
   });
+
+  // A request split by department (PayrollPart) is this lead's only in part:
+  // the parts of the departments they lead. Everything below that counts,
+  // approves or pays works from `mine`, and an unsplit request is the whole
+  // of itself, as it always was.
+  const led = await ledDepartmentIds(prisma, viewerId);
+  const rows = submissions.map((s) => {
+    const seats = s.user.memberships.map((m) => ({
+      role: m.role,
+      departmentId: m.departmentId,
+    }));
+    const approveScope = approvableDepartments(viewerId, led, s.user.id, seats);
+    const payScope = payableDepartments(viewerId, led, s.user.id, seats);
+    const split = s.parts.length > 0;
+    const priced = s.parts.map((p) => ({
+      ...p,
+      amount: partAmount(p, s.parts, s.netTotal),
+    }));
+    const inScope = (scope: ReadonlySet<string>) =>
+      priced.filter((p) => p.departmentId !== null && scope.has(p.departmentId));
+    const mine = inScope(approveScope);
+    const myPayable = inScope(payScope);
+    return {
+      s,
+      split,
+      priced,
+      approveScope,
+      mine,
+      myUnapproved: mine.filter((p) => p.approvedAt === null),
+      myUnpaid: myPayable.filter((p) => p.paidAt === null),
+      myPaid: myPayable.filter((p) => p.paidAt !== null),
+      /** What this lead's departments are asked for. */
+      share: split ? mine.reduce((sum, p) => sum + p.amount, 0) : s.netTotal,
+      /** Whether the bonuses and expenses are on this lead's part. */
+      carriesMine: !split || mine.some((p) => p.carriesLedger),
+    };
+  });
+  type Row = (typeof rows)[number];
+  const line = (parts: { departmentName: string; amount: number }[]) =>
+    splitLine(parts, parts.map((p) => p.amount), formatMoney);
+  const settleable = (r: Row) =>
+    PAYABLE.includes(r.s.status) &&
+    r.s.user.id !== viewerId && // nobody pays their own
+    (!r.split || r.myUnpaid.length > 0);
 
   // What the team asked for. EXPIRED filings are left out of the money: they
   // are never paid (they roll into the next cycle), so counting them would
   // overstate the month — the same rule the panel's totals use, which is what
   // keeps the two pages agreeing about a month.
-  const counted = submissions.filter((s) => s.status !== "EXPIRED");
-  const requestedTotal = counted.reduce((sum, s) => sum + s.netTotal, 0);
+  //
+  // A split request counts only its parts in this lead's departments, and its
+  // bonuses and expenses only when they ride on one of those parts.
+  const counted = rows.filter((r) => r.s.status !== "EXPIRED");
+  const requestedTotal = counted.reduce((sum, r) => sum + r.share, 0);
   const expensesTotalCents = counted.reduce(
-    (sum, s) => sum + s.expensesTotalCents,
+    (sum, r) => sum + (r.carriesMine ? r.s.expensesTotalCents : 0),
     0,
   );
-  const compensationsTotal = counted.reduce((sum, s) => sum + s.bonusesTotal, 0);
-  const waiting = submissions.filter((s) => s.status === "WITH_LEAD");
+  const compensationsTotal = counted.reduce(
+    (sum, r) => sum + (r.carriesMine ? r.s.bonusesTotal : 0),
+    0,
+  );
+  const waiting = rows.filter(
+    (r) => r.s.status === "WITH_LEAD" && (!r.split || r.myUnapproved.length > 0),
+  );
   // Approved and unpaid: what this lead can settle now, and what the tick
   // column and the batch bar are handed. Same order as the list.
-  const toSettle = submissions.filter(
-    (s) => PAYABLE.includes(s.status) && s.user.id !== viewerId, // nobody pays their own
-  );
-  const settleTotal = toSettle.reduce((sum, s) => sum + s.netTotal, 0);
-  const selectable: PayableRow[] = toSettle.map((s) => ({
-    id: s.id,
-    name: s.user.name ?? s.user.email ?? "—",
-    net: s.netTotal,
+  const toSettle = rows.filter(settleable);
+  /** What paying this row now would send: this lead's unpaid parts, or all of it. */
+  const settleNet = (r: Row) =>
+    r.split ? r.myUnpaid.reduce((sum, p) => sum + p.amount, 0) : r.s.netTotal;
+  const settleTotal = toSettle.reduce((sum, r) => sum + settleNet(r), 0);
+  const selectable: PayableRow[] = toSettle.map((r) => ({
+    id: r.s.id,
+    name: r.s.user.name ?? r.s.user.email ?? "—",
+    net: settleNet(r),
   }));
 
   // Who on the team hasn't filed for this period at all — a lead chasing an
@@ -309,12 +376,22 @@ export default async function TeamPayrollPage({
             </div>
           )}
           <ul className="flex flex-col gap-2">
-            {submissions.map((s) => {
-              const canSettle =
-                PAYABLE.includes(s.status) && s.user.id !== viewerId;
+            {rows.map((r) => {
+              const { s } = r;
+              const canSettle = settleable(r);
               const av = resolveAvatar(s.user.avatar, s.user.email ?? s.user.id);
-              const metaLine =
-                s.status === "DECLINED" && s.resubmitDeadline
+              const paidParts = r.priced.filter((p) => p.paidAt !== null);
+              const partlyPaid =
+                r.split && paidParts.length > 0 && s.status !== "PROCESSED";
+              const splitMeta = !r.split
+                ? null
+                : s.status === "WITH_LEAD" && r.myUnapproved.length === 0 && r.mine.length > 0
+                  ? `You approved your part · waiting on ${line(r.priced.filter((p) => p.approvedAt === null))}`
+                  : partlyPaid
+                    ? `${line(r.priced.filter((p) => p.paidAt === null))} still to pay`
+                    : null;
+              const metaLine = splitMeta ??
+                (s.status === "DECLINED" && s.resubmitDeadline
                   ? `Sent back · resubmit by ${formatTashkent(s.resubmitDeadline)}${
                       s.graceDayUsed ? " · grace day" : ""
                     }`
@@ -322,7 +399,7 @@ export default async function TeamPayrollPage({
                     ? `Paid ${formatDateTimeTz(s.processedAt)}`
                     : s.lastSubmittedAt
                       ? `Filed ${formatDateTimeTz(s.lastSubmittedAt)}`
-                      : null;
+                      : null);
 
               const summary: PanelRowSummary = {
                 name: s.user.name ?? s.user.email ?? "—",
@@ -330,13 +407,17 @@ export default async function TeamPayrollPage({
                 emoji: av.emoji,
                 bg: av.bg,
                 metaLine,
-                netLabel: formatMoney(s.netTotal),
+                // Split: what this lead's departments pay, out of the whole.
+                netLabel:
+                  r.split && r.share !== s.netTotal
+                    ? `${formatMoney(r.share)} of ${formatMoney(s.netTotal)}`
+                    : formatMoney(s.netTotal),
                 // No attention flags here: "waited too long" and "unusually
                 // large" are the reviewer's triage across the whole company, and
                 // a lead reading five of their own people's requests has the
                 // context those marks are a substitute for.
                 flags: [],
-                statusLabel: PAYROLL_STATUS_LABEL[s.status],
+                statusLabel: partlyPaid ? "Partly paid" : PAYROLL_STATUS_LABEL[s.status],
                 statusBadge: PAYROLL_STATUS_BADGE[s.status],
                 sourceLabel: PAYROLL_METHOD_LABEL[s.paymentMethod],
               };
@@ -367,29 +448,56 @@ export default async function TeamPayrollPage({
                         )
                       : [],
                     events: eventViews(s.events, formatDateTimeTz),
+                    parts: partViews(s.parts, s.netTotal, {
+                      formatDate: formatDateTimeTz,
+                      mine: r.approveScope,
+                    }),
+                    partsLive: s.status !== "DECLINED" && s.status !== "EXPIRED",
                   }}
                 />
               );
 
               // PanelRowShell is the <li>, so each shape is keyed here rather
               // than wrapped in one.
-              if (s.status === "WITH_LEAD") {
+              // A split request is approved and paid a department at a time,
+              // so the buttons name this lead's part and act on it alone.
+              if (s.status === "WITH_LEAD" && (!r.split || r.myUnapproved.length > 0)) {
                 return (
-                  <LeadRow key={s.id} submissionId={s.id} summary={summary}>
+                  <LeadRow
+                    key={s.id}
+                    submissionId={s.id}
+                    summary={summary}
+                    approveLabel={
+                      r.split ? `Approve ${line(r.myUnapproved)}` : undefined
+                    }
+                  >
                     {detail}
                   </LeadRow>
                 );
               }
               if (canSettle) {
                 return (
-                  <SettleRow key={s.id} submissionId={s.id} summary={summary}>
+                  <SettleRow
+                    key={s.id}
+                    submissionId={s.id}
+                    summary={summary}
+                    part={r.split ? line(r.myUnpaid) : undefined}
+                  >
                     {detail}
                   </SettleRow>
                 );
               }
-              if (s.status === "PROCESSED" && s.user.id !== viewerId) {
+              if (
+                s.user.id !== viewerId &&
+                (r.split ? r.myPaid.length > 0 : s.status === "PROCESSED")
+              ) {
                 return (
-                  <PaidRow key={s.id} submissionId={s.id} summary={summary}>
+                  <PaidRow
+                    key={s.id}
+                    submissionId={s.id}
+                    summary={summary}
+                    part={r.split ? line(r.myPaid) : undefined}
+                  >
                     {detail}
                   </PaidRow>
                 );

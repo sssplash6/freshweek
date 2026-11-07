@@ -7,6 +7,7 @@
 import { formatMoney } from "@/lib/penalties";
 import { formatCents, payrollMathRows } from "@/lib/payrollTypes";
 import { LedgerBreakdown, type LedgerLineView } from "./LedgerBreakdown";
+import { PartsBreakdown, type PartView } from "./PartsBreakdown";
 import type {
   SubmissionEventView,
   SubmissionExpenseView,
@@ -26,6 +27,10 @@ export type SubmissionDetailModel = {
   /** Everything finance needs to send the money, in full (the PDF masks it). */
   paymentDetails: { label: string; value: string }[];
   events: SubmissionEventView[];
+  /** The department split, when the request has one (PayrollPart). */
+  parts?: PartView[];
+  /** Whether approvals and payments on the parts are live (not sent back). */
+  partsLive?: boolean;
 };
 
 export function SubmissionDetail({ view }: { view: SubmissionDetailModel }) {
@@ -51,6 +56,10 @@ export function SubmissionDetail({ view }: { view: SubmissionDetailModel }) {
           </div>
         </dl>
       </div>
+
+      {view.parts && view.parts.length > 0 && (
+        <PartsBreakdown parts={view.parts} showProgress={view.partsLive ?? true} />
+      )}
 
       <LedgerBreakdown
         bonuses={view.bonuses}

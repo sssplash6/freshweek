@@ -61,6 +61,12 @@ export type PanelBoardItem = {
    * totalled, which is what keeps this strip reconciling with the register.
    */
   countable?: boolean;
+  /**
+   * On a request split by department that is partly paid: how much of `net`
+   * has already gone out. It moves from the "to pay" line to the "paid" one,
+   * so a half-paid request doesn't read as wholly owed.
+   */
+  paidNet?: number;
 };
 
 /**
@@ -261,7 +267,11 @@ export function PanelBoard({
    */
   const selectable: PayableRow[] = visible
     .filter((r) => r.item.payable)
-    .map((r) => ({ id: r.item.id, name: r.item.name, net: r.item.net }));
+    .map((r) => ({
+      id: r.item.id,
+      name: r.item.name,
+      net: r.item.net - (r.item.paidNet ?? 0),
+    }));
   const narrowed =
     q !== "" || status !== null || period !== null || dept !== null;
 
@@ -286,6 +296,8 @@ export function PanelBoard({
   const sumOf = (list: Row[]) => list.reduce((s, r) => s + r.item.net, 0);
   const awaiting = counted.filter((r) => r.item.money === "awaiting");
   const settled = counted.filter((r) => r.item.money === "paid");
+  // A partly paid split request is still awaiting, but only its unpaid parts.
+  const partlyPaid = awaiting.reduce((s, r) => s + (r.item.paidNet ?? 0), 0);
   const awaitingSources = new Set(awaiting.map((r) => r.item.method)).size;
   // Who never filed, under the same narrowing — a department's strip that
   // counted the whole company's non-filers would not be that department's.
@@ -299,7 +311,7 @@ export function PanelBoard({
     ? [
         {
           label: "To pay",
-          value: formatMoney(sumOf(awaiting)),
+          value: formatMoney(sumOf(awaiting) - partlyPaid),
           hint:
             awaiting.length > 0
               ? `${awaiting.length} ${awaiting.length === 1 ? "request" : "requests"} · ${awaitingSources} ${awaitingSources === 1 ? "source" : "sources"}`
@@ -308,7 +320,7 @@ export function PanelBoard({
         },
         {
           label: "Paid",
-          value: formatMoney(sumOf(settled)),
+          value: formatMoney(sumOf(settled) + partlyPaid),
           hint: `${settled.length} ${settled.length === 1 ? "request" : "requests"} settled`,
           tone: settled.length > 0 ? "brand" : "muted",
         },

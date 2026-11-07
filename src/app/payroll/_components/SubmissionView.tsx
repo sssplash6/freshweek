@@ -12,6 +12,7 @@ import {
   type PayrollStatus,
 } from "@/lib/payrollTypes";
 import { LedgerBreakdown, type LedgerLineView } from "./LedgerBreakdown";
+import { PartsBreakdown, type PartView } from "./PartsBreakdown";
 
 export type SubmissionEventView = {
   id: string;
@@ -45,6 +46,10 @@ export type SubmissionViewModel = {
   /** The payout instructions, labelled — shown in full, unlike on the PDF. */
   paymentDetails: { label: string; value: string }[];
   events: SubmissionEventView[];
+  /** The department split, when the request has one (PayrollPart). */
+  parts?: PartView[];
+  /** Overrides the status badge — "Partly paid" on a split request. */
+  statusLabel?: string;
 };
 
 export function SubmissionView({
@@ -63,7 +68,7 @@ export function SubmissionView({
         <span
           className={`shrink-0 rounded-full px-2.5 py-0.5 text-xs font-bold ${PAYROLL_STATUS_BADGE[view.status]}`}
         >
-          {PAYROLL_STATUS_LABEL[view.status]}
+          {view.statusLabel ?? PAYROLL_STATUS_LABEL[view.status]}
         </span>
       </div>
 
@@ -91,6 +96,15 @@ export function SubmissionView({
           </div>
         </dl>
       </div>
+
+      {view.parts && view.parts.length > 0 && (
+        <div className="mt-4">
+          <PartsBreakdown
+            parts={view.parts}
+            showProgress={view.status !== "DECLINED" && view.status !== "EXPIRED"}
+          />
+        </div>
+      )}
 
       <div className="mt-4">
         <LedgerBreakdown

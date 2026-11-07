@@ -17,6 +17,16 @@ import { editSubmissionAsFinance } from "../finance/actions";
  */
 export type FinanceEditModel = {
   baseSalary: number;
+  /**
+   * A request split by department (PayrollPart): its salary is revised one
+   * department at a time, and the base salary is their sum.
+   */
+  parts?: {
+    id: string;
+    departmentName: string;
+    salary: number;
+    carriesLedger: boolean;
+  }[];
   bonusLines: { id: string; label: string; amount: number }[];
   fineLines: { id: string; label: string; amount: number }[];
   expenses: { id: string; label: string; amountCents: number; hasReceipt: boolean }[];
@@ -51,6 +61,14 @@ export function FinanceEditModal({
   onClose: () => void;
 }) {
   const [baseSalary, setBaseSalary] = useState(String(model.baseSalary));
+  const parts = model.parts ?? [];
+  const [partSalaries, setPartSalaries] = useState<Record<string, string>>(() =>
+    Object.fromEntries(parts.map((p) => [p.id, String(p.salary)])),
+  );
+  const partSalaryNums = parts.map((p) => ({
+    id: p.id,
+    salary: Math.max(0, Math.round(Number(partSalaries[p.id]) || 0)),
+  }));
   const [bonuses, setBonuses] = useState(
     model.bonusLines.map((l) => ({ ...l, value: String(l.amount) })),
   );
@@ -69,7 +87,10 @@ export function FinanceEditModal({
   const [error, setError] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
 
-  const salaryNum = Math.max(0, Math.round(Number(baseSalary) || 0));
+  const salaryNum =
+    parts.length > 0
+      ? partSalaryNums.reduce((s, p) => s + p.salary, 0)
+      : Math.max(0, Math.round(Number(baseSalary) || 0));
   const bonusesTotal = bonuses.reduce((s, b) => s + (Math.round(Number(b.value)) || 0), 0);
   const finesTotal = fines.reduce((s, f) => s + (Math.round(Number(f.value)) || 0), 0);
   const expensesTotalCents = expenses.reduce(
@@ -104,6 +125,7 @@ export function FinanceEditModal({
         const res = await editSubmissionAsFinance(submissionId, {
           reason,
           baseSalary: salaryNum,
+          ...(parts.length > 0 ? { partSalaries: partSalaryNums } : {}),
           expenses: expenses.map((e) => ({
             id: e.id,
             label: e.label.trim(),
@@ -142,19 +164,51 @@ export function FinanceEditModal({
           revised invoice.
         </p>
 
-        <label className="mt-4 flex items-center justify-between gap-3">
-          <span className="text-xs font-medium text-ink">Base salary</span>
-          <span className="flex items-center gap-1.5">
-            <input
-              type="number"
-              min={0}
-              value={baseSalary}
-              onChange={(e) => setBaseSalary(e.target.value)}
-              className="w-32 rounded-lg border border-line px-2.5 py-1 text-right text-sm tabular-nums text-ink focus:border-brand focus:outline-none"
-            />
-            <span className="text-[11px] text-muted-fg">{PENALTY_CURRENCY}</span>
-          </span>
-        </label>
+        {parts.length > 0 ? (
+          // Split by department: one salary per department, each its own
+          // department's to pay. The bonuses, fines and expenses below stay on
+          // the department they were filed with.
+          <div className="mt-4 flex flex-col gap-2">
+            {parts.map((p) => (
+              <label key={p.id} className="flex items-center justify-between gap-3">
+                <span className="text-xs font-medium text-ink">
+                  {`Base salary — ${p.departmentName}`}
+                  {p.carriesLedger && (
+                    <span className="block text-[11px] font-normal text-muted-fg">
+                      carries the bonuses, fines and expenses
+                    </span>
+                  )}
+                </span>
+                <span className="flex items-center gap-1.5">
+                  <input
+                    type="number"
+                    min={0}
+                    value={partSalaries[p.id] ?? ""}
+                    onChange={(e) =>
+                      setPartSalaries((prev) => ({ ...prev, [p.id]: e.target.value }))
+                    }
+                    className="w-32 rounded-lg border border-line px-2.5 py-1 text-right text-sm tabular-nums text-ink focus:border-brand focus:outline-none"
+                  />
+                  <span className="text-[11px] text-muted-fg">{PENALTY_CURRENCY}</span>
+                </span>
+              </label>
+            ))}
+          </div>
+        ) : (
+          <label className="mt-4 flex items-center justify-between gap-3">
+            <span className="text-xs font-medium text-ink">Base salary</span>
+            <span className="flex items-center gap-1.5">
+              <input
+                type="number"
+                min={0}
+                value={baseSalary}
+                onChange={(e) => setBaseSalary(e.target.value)}
+                className="w-32 rounded-lg border border-line px-2.5 py-1 text-right text-sm tabular-nums text-ink focus:border-brand focus:outline-none"
+              />
+              <span className="text-[11px] text-muted-fg">{PENALTY_CURRENCY}</span>
+            </span>
+          </label>
+        )}
 
         {bonuses.length > 0 && (
           <Section

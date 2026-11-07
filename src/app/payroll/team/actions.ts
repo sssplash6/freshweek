@@ -8,17 +8,26 @@ import { notify } from "@/lib/notifications";
 import { sendEmail } from "@/lib/email";
 import {
   applyTransition,
+  approveParts,
   appUrl,
   expireLapsedSubmissions,
   financeEmails,
   formatTashkent,
   resubmitWindowFor,
   reviewerUsers,
+  type PartLine,
 } from "@/lib/payroll";
 import {
   approvingLeadsFor,
   canApprovePayroll,
 } from "@/lib/payrollApproval";
+import {
+  anyPartPaid,
+  approvableDepartments,
+  ledDepartmentIds,
+  seatsOf,
+  splitLine,
+} from "@/lib/payrollParts";
 import { payrollPeriodLabel, isPayrollOpenFor } from "@/lib/payrollTypes";
 
 export type LeadActionResult = { ok: true } | { ok: false; error: string };
@@ -52,6 +61,7 @@ async function loadForApproval(actorId: string, submissionId: string) {
       period: {
         select: { id: true, year: true, month: true, filingClosesAt: true },
       },
+      parts: { select: { paidAt: true } },
     },
   });
   if (!sub) return null;
@@ -99,6 +109,10 @@ export async function approveAsLead(
     select: { name: true, email: true },
   });
   const meName = me?.name ?? me?.email ?? "Their lead";
+
+  if (sub.parts.length > 0) {
+    return approveSplit(sub, actorId, { label, who, meName });
+  }
 
   await prisma.$transaction(async (tx) => {
     await applyTransition(tx, {
@@ -195,6 +209,13 @@ export async function sendBackAsLead(
       "That request has already moved on — reload to see where it is.",
     );
   }
+  // Finance can pay a part past its lead (FINANCE_PAYABLE). Once money has
+  // moved, sending the request back would reopen numbers already paid out.
+  if (anyPartPaid(sub.parts)) {
+    return fail(
+      "Part of this request has already been paid, so it can't be sent back — ask finance.",
+    );
+  }
 
   const label = payrollPeriodLabel(sub.period.year, sub.period.month);
   const who = sub.user.name ?? sub.user.email ?? "Someone";
@@ -249,6 +270,108 @@ export async function sendBackAsLead(
         `It comes back to them for approval, then goes to finance.\n\n` +
         `Your form is reopened with everything prefilled: ${appUrl()}/payroll\n\n— FreshWeek`,
     });
+  }
+
+  revalidateAll();
+  return { ok: true };
+}
+
+/**
+ * Approve this lead's part of a request split by department (PayrollPart).
+ *
+ * The lead approves only the parts of departments they lead — the other
+ * department's money is its own lead's to vouch for — and the request goes on
+ * to finance only when the last part is approved (approveParts in
+ * lib/payroll.ts). Until then the filer is told whose approval is still
+ * outstanding, so a half-approved request doesn't read as a stuck one.
+ */
+async function approveSplit(
+  sub: NonNullable<Awaited<ReturnType<typeof loadForApproval>>>,
+  actorId: string,
+  ctx: { label: string; who: string; meName: string },
+): Promise<LeadActionResult> {
+  const { label, who, meName } = ctx;
+  const [led, seats] = await Promise.all([
+    ledDepartmentIds(prisma, actorId),
+    seatsOf(prisma, sub.user.id),
+  ]);
+  const scope = approvableDepartments(actorId, led, sub.user.id, seats);
+  const line = (parts: PartLine[]) =>
+    splitLine(parts, parts.map((p) => p.amount), formatMoney);
+
+  let toFinance: boolean;
+  try {
+    toFinance = await prisma.$transaction(async (tx) => {
+      const step = await approveParts(tx, {
+        submissionId: sub.id,
+        actorId,
+        departmentIds: scope,
+      });
+      const filer = sub.user.id === actorId ? [] : sub.user.id;
+      let reviewerIds: string[] = [];
+      if (step.toFinance) {
+        reviewerIds = (await reviewerUsers(tx, financeEmails()))
+          .map((r) => r.id)
+          .filter((id) => id !== actorId);
+        await notify(
+          tx,
+          reviewerIds,
+          "PAYROLL",
+          `${who}: ${label} pay request approved by every department — ${formatMoney(sub.netTotal)} net, ready to pay.`,
+        );
+        await notify(
+          tx,
+          filer,
+          "PAYROLL",
+          `${meName} approved ${line(step.acted)} — every part of your ${label} pay request is approved, and it's with finance now.`,
+        );
+      } else {
+        await notify(
+          tx,
+          filer,
+          "PAYROLL",
+          `${meName} approved ${line(step.acted)} of your ${label} pay request — still waiting on ${line(step.remaining)}.`,
+        );
+      }
+      // Co-leads of the same department share its desk; tell them it's done.
+      const actedOn = new Set(step.acted.map((p) => p.departmentName));
+      const coLeads = await approvingLeadsFor(tx, sub.user.id);
+      await notify(
+        tx,
+        coLeads
+          .filter((l) => l.departments.some((d) => actedOn.has(d)))
+          .map((l) => l.id)
+          .filter((id) => id !== actorId && !reviewerIds.includes(id)),
+        "PAYROLL",
+        `${meName} approved ${line(step.acted)} of ${who}'s ${label} pay request.`,
+      );
+      return step.toFinance;
+    });
+  } catch (e) {
+    if (e instanceof Error) return fail(e.message);
+    throw e;
+  }
+
+  if (toFinance) {
+    const pdf = await prisma.payrollPdf.findUnique({
+      where: { submissionId: sub.id },
+      select: { bytes: true },
+    });
+    await Promise.all(
+      financeEmails().map((to) =>
+        sendEmail({
+          to,
+          subject: `Payroll: ${who}'s ${label} request approved by every department — ${formatMoney(sub.netTotal)} to pay`,
+          text:
+            `${who}'s ${label} pay request is split by department, and every department's lead has now approved their part — ${formatMoney(sub.netTotal)} net.\n\n` +
+            `Each lead can confirm their own department's part once they've paid it; you can pay any part. ` +
+            `The invoice, with the split, is attached: ${appUrl()}/payroll/panel\n\n— FreshWeek`,
+          attachments: pdf
+            ? [{ filename: `${who} — ${label}.pdf`, bytes: pdf.bytes }]
+            : undefined,
+        }),
+      ),
+    );
   }
 
   revalidateAll();

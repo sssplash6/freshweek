@@ -18,9 +18,19 @@ import {
   requirePayer,
   resubmitWindowFor,
   reviewerUsers,
+  payParts,
+  unpayParts,
   unprocessSubmission,
   type Payer,
+  type PartLine,
 } from "@/lib/payroll";
+import {
+  anyPartPaid,
+  partAmount,
+  payableDepartments,
+  seatsOf,
+  splitLine,
+} from "@/lib/payrollParts";
 import { regenerateInvoicePdf } from "@/lib/payrollInvoice";
 import {
   computeNet,
@@ -94,8 +104,33 @@ async function loadForReview(submissionId: string) {
       period: {
         select: { id: true, year: true, month: true, filingClosesAt: true },
       },
+      parts: { select: { departmentId: true, paidAt: true } },
     },
   });
+}
+
+/** "Research $400 · Global Admissions $600". */
+function partsLine(parts: PartLine[]): string {
+  return splitLine(parts, parts.map((p) => p.amount), formatMoney);
+}
+
+/**
+ * Which parts of a split request this payer may pay or undo: every part for
+ * finance, and for a lead the parts of the departments they lead where the
+ * filer is a member (lib/payrollParts.ts payableDepartments). Re-derived from
+ * live seats per request, for the reason payOne gives about batches.
+ */
+async function partScope(
+  payer: Payer,
+  filerId: string,
+): Promise<ReadonlySet<string> | "all"> {
+  if (payer.all) return "all";
+  return payableDepartments(
+    payer.actorId,
+    payer.ledDepartments,
+    filerId,
+    await seatsOf(prisma, filerId),
+  );
 }
 
 /** In-app notice to the other reviewers, so a queue isn't worked twice. */
@@ -147,6 +182,13 @@ export async function declineSubmission(
   if (!sub) return fail("Request not found.");
   if (!DECLINABLE.includes(sub.status)) {
     return fail("Only a request still in review can be declined — reload.");
+  }
+  // A department has already paid its part. Declining would send the filer
+  // back to refile money that is already out — undo that payment first.
+  if (anyPartPaid(sub.parts)) {
+    return fail(
+      "Part of this request has already been paid — undo that payment before declining it.",
+    );
   }
 
   const now = new Date();
@@ -250,6 +292,7 @@ async function payOne(
           : "Only a request awaiting payment can be confirmed — reload.",
     };
   }
+  if (sub.parts.length > 0) return payOneSplit(sub, payer, who);
 
   try {
     const result = await processSubmission({ submissionId, actorId });
@@ -306,6 +349,147 @@ async function payOne(
 }
 
 /**
+ * payOne for a request split by department: pay the parts this payer may pay
+ * (all of them for finance; a lead's own departments' parts otherwise) and
+ * leave the rest for their own lead. The request is paid out — and the filer
+ * gets the final invoice — only when the last part is (payParts in
+ * lib/payroll.ts). Until then the filer hears what arrived and what is still
+ * to come, because "your request was processed" would be a lie about the half
+ * nobody has paid yet.
+ */
+async function payOneSplit(
+  sub: NonNullable<Awaited<ReturnType<typeof loadForReview>>>,
+  payer: Payer,
+  who: string,
+): Promise<PayOutcome> {
+  const scope = await partScope(payer, sub.user.id);
+  if (scope !== "all" && scope.size === 0) {
+    return { ok: false, name: who, error: "None of this request is yours to pay." };
+  }
+
+  let result: Awaited<ReturnType<typeof payParts>>;
+  try {
+    result = await payParts({
+      submissionId: sub.id,
+      actorId: payer.actorId,
+      departmentIds: scope,
+    });
+  } catch (e) {
+    if (e instanceof Error) return { ok: false, name: who, error: e.message };
+    throw e;
+  }
+  if (!result.ok) {
+    return {
+      ok: false,
+      name: who,
+      error:
+        `The ledger moved after filing — ${result.reasons.join(" ")} ` +
+        (payer.all
+          ? "Decline it so they refile with a fresh snapshot."
+          : "Ask finance to send it back so they can refile with a fresh snapshot."),
+    };
+  }
+
+  const label = payrollPeriodLabel(sub.period.year, sub.period.month);
+  const paid = partsLine(result.acted);
+  if (result.paidOut) {
+    await notify(
+      prisma,
+      sub.user.id,
+      "PAYROLL",
+      `Your ${label} pay request is paid in full — ${paid} just now, ${formatMoney(sub.netTotal)} in all. Fine deductions were recorded on your ledger.`,
+    );
+    await tellOtherReviewers(
+      prisma,
+      `${who}'s ${label} pay request is paid in full — ${paid} just now, ${formatMoney(sub.netTotal)} in all.`,
+      [payer.actorId, sub.user.id],
+    );
+  } else {
+    const left = partsLine(result.remaining);
+    await notify(
+      prisma,
+      sub.user.id,
+      "PAYROLL",
+      `${paid} of your ${label} pay request was paid. Still to come: ${left}.`,
+    );
+    await tellOtherReviewers(
+      prisma,
+      `${who}'s ${label}: ${paid} paid — ${left} still to pay.`,
+      [payer.actorId, sub.user.id],
+    );
+  }
+
+  if (sub.user.email) {
+    const pdf = result.paidOut
+      ? await prisma.payrollPdf.findUnique({
+          where: { submissionId: sub.id },
+          select: { bytes: true },
+        })
+      : null;
+    await sendEmail({
+      to: sub.user.email,
+      subject: result.paidOut
+        ? `Payroll: your ${label} request was paid — ${formatMoney(sub.netTotal)}`
+        : `Payroll: part of your ${label} request was paid — ${paid}`,
+      text: result.paidOut
+        ? `Your ${label} pay request is paid in full: ${formatMoney(sub.netTotal)}. ` +
+          `Any fine deductions were recorded on your ledger.\n\nThe final invoice is attached.\n\n— FreshWeek`
+        : `${paid} of your ${label} pay request was paid.\n\n` +
+          `Still to come: ${partsLine(result.remaining)} — that department's lead (or finance) pays it.\n\n` +
+          `${appUrl()}/payroll\n\n— FreshWeek`,
+      attachments: pdf
+        ? [{ filename: `${who} — ${label}.pdf`, bytes: pdf.bytes }]
+        : undefined,
+    });
+  }
+
+  return { ok: true, name: who };
+}
+
+/**
+ * undoPayment for a request split by department: take back the payment of the
+ * parts this payer may pay. A lead undoes their own department's part; finance
+ * can undo any. Works whether or not the request was already paid out in full
+ * (unpayParts in lib/payroll.ts moves it back if it was).
+ */
+async function undoSplit(
+  sub: NonNullable<Awaited<ReturnType<typeof loadForReview>>>,
+  payer: Payer,
+): Promise<FinanceActionResult> {
+  const scope = await partScope(payer, sub.user.id);
+  if (scope !== "all" && scope.size === 0) return fail("Request not found.");
+
+  let step: Awaited<ReturnType<typeof unpayParts>>;
+  try {
+    step = await unpayParts({
+      submissionId: sub.id,
+      actorId: payer.actorId,
+      departmentIds: scope,
+    });
+  } catch (e) {
+    if (e instanceof Error) return fail(e.message);
+    throw e;
+  }
+
+  const label = payrollPeriodLabel(sub.period.year, sub.period.month);
+  const who = sub.user.name ?? sub.user.email ?? "Someone";
+  const undone = partsLine(step.acted);
+  await notify(
+    prisma,
+    sub.user.id,
+    "PAYROLL",
+    `The payment of ${undone} of your ${label} pay request was marked by mistake and has been undone — that part is waiting for payment again.`,
+  );
+  await tellOtherReviewers(
+    prisma,
+    `${who}'s ${label}: payment of ${undone} undone — waiting for payment again.`,
+    [payer.actorId, sub.user.id],
+  );
+  revalidatePanels();
+  return { ok: true };
+}
+
+/**
  * Confirm the payment: the snapshot is re-verified against the live ledger,
  * the fine deduction is written back as one PAYROLL FinePayment batch, the
  * bonuses are stamped consumed, and the request goes PROCESSED (see
@@ -352,6 +536,7 @@ export async function undoPayment(
 
   const sub = await loadForReview(submissionId);
   if (!sub || !mayPay(payer, sub.user.id)) return fail("Request not found.");
+  if (sub.parts.length > 0) return undoSplit(sub, payer);
   if (sub.status !== "PROCESSED") {
     return fail("Only a paid request can be undone — reload.");
   }
@@ -466,6 +651,11 @@ export type FinanceEdit = {
   /** Required. Goes in the audit trail and in what the filer is told. */
   reason: string;
   baseSalary: number;
+  /**
+   * A request split by department: every part's new salary, by part id. The
+   * base salary is then their sum and `baseSalary` is ignored.
+   */
+  partSalaries?: { id: string; salary: number }[];
   expenses: FinanceExpenseEdit[];
   bonusLines: FinanceLineEdit[];
   fineLines: FinanceLineEdit[];
@@ -549,6 +739,16 @@ export async function editSubmissionAsFinance(
         },
       },
       expenses: { select: { id: true, label: true, amountCents: true } },
+      parts: {
+        orderBy: { position: "asc" },
+        select: {
+          id: true,
+          departmentName: true,
+          salary: true,
+          carriesLedger: true,
+          paidAt: true,
+        },
+      },
     },
   });
   if (!sub) return fail("Request not found.");
@@ -560,9 +760,53 @@ export async function editSubmissionAsFinance(
 
   // ----- Validate every line before writing anything -----
 
-  const baseSalary = Math.round(Number(edit.baseSalary));
-  if (!Number.isFinite(baseSalary) || baseSalary < 0 || baseSalary > MAX_PAYROLL_AMOUNT) {
-    return fail("Enter a valid base salary (whole dollars).");
+  // A split request's salary IS its parts' salaries: finance revises each
+  // department's, and the base salary is their sum rather than a figure typed
+  // on its own that the parts would then disagree with.
+  const partEdits: {
+    id: string;
+    departmentName: string;
+    salary: number;
+    wasSalary: number;
+    carriesLedger: boolean;
+  }[] = [];
+  let baseSalary: number;
+  if (sub.parts.length > 0) {
+    // Money has left for one department; the figures it was paid against stay.
+    if (anyPartPaid(sub.parts)) {
+      return fail(
+        "Part of this request has already been paid, so its figures can't change now — undo that payment first.",
+      );
+    }
+    const given = new Map((edit.partSalaries ?? []).map((p) => [p.id, p.salary]));
+    if (given.size !== sub.parts.length) {
+      return fail("That request changed while you were editing — reload.");
+    }
+    for (const part of sub.parts) {
+      if (!given.has(part.id)) {
+        return fail("That request changed while you were editing — reload.");
+      }
+      const salary = Math.round(Number(given.get(part.id)));
+      if (!Number.isFinite(salary) || salary < 0 || salary > MAX_PAYROLL_AMOUNT) {
+        return fail(`Enter a valid ${part.departmentName} salary (whole dollars).`);
+      }
+      partEdits.push({
+        id: part.id,
+        departmentName: part.departmentName,
+        salary,
+        wasSalary: part.salary,
+        carriesLedger: part.carriesLedger,
+      });
+    }
+    baseSalary = partEdits.reduce((sum, p) => sum + p.salary, 0);
+    if (baseSalary > MAX_PAYROLL_AMOUNT) {
+      return fail("Enter a valid base salary (whole dollars).");
+    }
+  } else {
+    baseSalary = Math.round(Number(edit.baseSalary));
+    if (!Number.isFinite(baseSalary) || baseSalary < 0 || baseSalary > MAX_PAYROLL_AMOUNT) {
+      return fail("Enter a valid base salary (whole dollars).");
+    }
   }
 
   if (edit.expenses.length > MAX_PAYROLL_EXPENSES) {
@@ -658,11 +902,27 @@ export async function editSubmissionAsFinance(
   if (netTotal < 0) {
     return fail("The fine deductions exceed the rest of the request — the total can't go below zero.");
   }
+  // The fines come out of one department's payment, so that part has to be
+  // able to take them on its own.
+  const carrying = partEdits.find((p) => p.carriesLedger);
+  if (carrying && partAmount(carrying, partEdits, netTotal) < 0) {
+    return fail(
+      `The fine deductions are more than the ${carrying.departmentName} part they come out of — lower them or raise that salary.`,
+    );
+  }
 
   // What changed, in the filer's terms. Built before the write so it describes
   // the move rather than the result, and empty when nothing actually moved.
   const changes: string[] = [];
-  if (baseSalary !== sub.baseSalary) {
+  if (partEdits.length > 0) {
+    for (const p of partEdits) {
+      if (p.salary !== p.wasSalary) {
+        changes.push(
+          `${p.departmentName} salary ${formatMoney(p.wasSalary)} → ${formatMoney(p.salary)}`,
+        );
+      }
+    }
+  } else if (baseSalary !== sub.baseSalary) {
     changes.push(`base salary ${formatMoney(sub.baseSalary)} → ${formatMoney(baseSalary)}`);
   }
   if (bonusesTotal !== sub.bonusesTotal) {
@@ -756,6 +1016,13 @@ export async function editSubmissionAsFinance(
       }
     }
 
+    for (const p of partEdits) {
+      if (p.salary === p.wasSalary) continue;
+      await tx.payrollPart.update({
+        where: { id: p.id },
+        data: { salary: p.salary },
+      });
+    }
     await tx.payrollSubmission.update({
       where: { id: sub.id },
       data: { baseSalary, bonusesTotal, finesTotal, expensesTotalCents, netTotal },
