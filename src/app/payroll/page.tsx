@@ -31,6 +31,7 @@ import {
   isHeldOpenPeriod,
   isPayrollOpenFor,
   isPayrollRolloutTester,
+  payrollFilingsAllowed,
   PAYROLL_STATUS_BADGE,
   PAYROLL_STATUS_LABEL,
 } from "@/lib/payrollTypes";
@@ -126,10 +127,15 @@ export default async function PayrollPage() {
   // in the copy — "the 1st" on its own reads as this month's. December wraps.
   const nextMonthName = payrollMonthName(period.month === 12 ? 1 : period.month + 1);
 
-  const current = await prisma.payrollSubmission.findUnique({
-    where: { userId_periodId: { userId: me.id, periodId: period.id } },
+  // The month's current request is its latest filing; an earlier one only
+  // exists for someone allowed a second request (PAYROLL_EXTRA_FILINGS), and
+  // is listed with the past requests.
+  const current = await prisma.payrollSubmission.findFirst({
+    where: { userId: me.id, periodId: period.id },
+    orderBy: { filing: "desc" },
     select: {
       id: true,
+      filing: true,
       status: true,
       baseSalary: true,
       bonusesTotal: true,
@@ -174,10 +180,12 @@ export default async function PayrollPage() {
   });
 
   const history = await prisma.payrollSubmission.findMany({
-    where: { userId: me.id, NOT: { periodId: period.id } },
+    where: { userId: me.id, ...(current ? { NOT: { id: current.id } } : {}) },
     orderBy: { createdAt: "desc" },
     select: {
       id: true,
+      filing: true,
+      periodId: true,
       status: true,
       netTotal: true,
       submittedAt: true,
@@ -230,7 +238,13 @@ export default async function PayrollPage() {
   // dashboard, until it's answered.
   const needsDetails = await submissionNeedingPaymentDetails(session.user.id);
 
-  const canFileFresh = !current && filingOpen;
+  // Allowed another request this month, and the last one is paid: the form
+  // opens again below the paid request. The action re-checks all of it.
+  const filingAgain =
+    current?.status === "PROCESSED" &&
+    current.filing < payrollFilingsAllowed(me.email, period);
+  const nextRequest = filingAgain ? requestName(current.filing + 1) : null;
+  const canFileFresh = (!current || filingAgain) && filingOpen;
   const canResubmit = current?.status === "DECLINED"; // lapsed ones were swept above
   // Still in the queue (with the lead or finance), untouched by a reviewer, and
   // the window is still open. The review is the other bound: an admin acting on
@@ -505,13 +519,29 @@ export default async function PayrollPage() {
         />
       )}
 
-      {view && !canEdit && (
-        <SubmissionView heading={`Your ${label} request`} view={view} />
+      {view && !canEdit && current && (
+        <SubmissionView
+          heading={`Your ${current.filing > 1 ? `${requestName(current.filing)} ` : ""}${label} request`}
+          view={view}
+        />
+      )}
+
+      {/* The one place a month takes a second request. Say why it is here,
+          and what goes in it, before the form. */}
+      {canFileFresh && nextRequest && (
+        <section className="mt-5 mb-5 rounded-xl border border-line bg-surface p-4">
+          <p className="text-sm font-semibold text-ink">
+            {`You can file a ${nextRequest} ${label} request`}
+          </p>
+          <p className="mt-1 text-sm text-muted-fg">
+            {`Your ${label} request above is paid. This one is for the pay it didn't cover, such as your other department's salary. Leave out anything already paid. Bonuses and fines that request already settled aren't counted again.`}
+          </p>
+        </section>
       )}
 
       {canEdit && view && snapshot && current && (
         <EditableSubmission
-          heading={`Your ${label} request`}
+          heading={`Your ${current.filing > 1 ? `${requestName(current.filing)} ` : ""}${label} request`}
           view={view}
           form={
             <PayrollForm
@@ -556,10 +586,12 @@ export default async function PayrollPage() {
 
       {canFileFresh && !blocking && snapshot && (
         <PayrollForm
-          periodLabel={label}
+          periodLabel={nextRequest ? `${label} (${nextRequest} request)` : label}
           closesLabel={closesLabel}
           snapshot={snapshot}
-          prefill={prefill}
+          // Last time's salary is what the paid request already covered, so a
+          // further request starts with only the payment details filled in.
+          prefill={nextRequest ? { ...prefill, baseSalary: null, parts: undefined } : prefill}
           mode={{ kind: "file" }}
           departments={formDepartments}
         />
@@ -603,6 +635,9 @@ export default async function PayrollPage() {
                 <div className="flex min-w-0 items-center gap-3">
                   <span className="text-sm font-medium text-ink">
                     {payrollPeriodLabel(h.period.year, h.period.month)}
+                    {/* A month with more than one request names which. */}
+                    {(h.filing > 1 || h.periodId === period.id) &&
+                      ` · ${requestName(h.filing)} request`}
                   </span>
                   <span
                     className={`shrink-0 rounded-full px-2 py-0.5 text-[11px] font-bold ${PAYROLL_STATUS_BADGE[h.status]}`}
@@ -629,5 +664,12 @@ export default async function PayrollPage() {
         </section>
       )}
     </div>
+  );
+}
+
+/** "first", "second", … for a month's requests. */
+function requestName(filing: number): string {
+  return (
+    ["first", "second", "third", "fourth", "fifth"][filing - 1] ?? `${filing}th`
   );
 }

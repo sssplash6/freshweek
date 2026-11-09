@@ -85,6 +85,45 @@ export const PAYROLL_HELD_OPEN: { year: number; month: number } | null = {
   month: 10,
 };
 
+/**
+ * People allowed more than one pay request in a month, by hand.
+ *
+ * One request a month is the rule. This is for someone whose month was filed
+ * and paid as one request when it should have been two: Hasan works in two
+ * departments, and his October request went in, and was paid, before requests
+ * could be split by department. His second department's pay comes in a second
+ * request, filed the usual way.
+ *
+ * A second request opens only once the one before it is PAID, so the bonuses
+ * and fines it pulls in are the ones the first did not already settle. It goes
+ * through the same window, leads and finance as any other. `filings` is how
+ * many requests that month may hold in all.
+ */
+export const PAYROLL_EXTRA_FILINGS: {
+  email: string;
+  year: number;
+  month: number;
+  filings: number;
+}[] = [
+  // Hasan Mavlonov: Research Institute and Global Admissions.
+  { email: "hasan@freshman.academy", year: 2026, month: 10, filings: 2 },
+];
+
+/** How many requests this person may file for this month: 1 unless excepted. */
+export function payrollFilingsAllowed(
+  email: string | null | undefined,
+  period: { year: number; month: number },
+): number {
+  const e = (email ?? "").trim().toLowerCase();
+  const entry = PAYROLL_EXTRA_FILINGS.find(
+    (x) =>
+      x.email.toLowerCase() === e &&
+      x.year === period.year &&
+      x.month === period.month,
+  );
+  return entry ? Math.max(1, entry.filings) : 1;
+}
+
 /** Whether this period is the one being held open. */
 export function isHeldOpenPeriod(period: {
   year: number;

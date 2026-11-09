@@ -1000,7 +1000,13 @@ model PayrollSubmission {
   // all otherwise (see PayrollPart).
   parts          PayrollPart[]
 
-  @@unique([userId, periodId])
+  // Which of this person's requests for the month this is: 1, or 2 and up for
+  // someone allowed to file again once the first is paid
+  // (PAYROLL_EXTRA_FILINGS in lib/payrollTypes.ts). The highest number is the
+  // month's current request; the ones before it are paid and kept as history.
+  filing Int @default(1)
+
+  @@unique([userId, periodId, filing])
   @@index([periodId, status])
   @@index([userId, status])
 }

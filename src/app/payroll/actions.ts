@@ -44,6 +44,7 @@ import {
   paymentFieldsFor,
   validatePaymentDetails,
   isPayrollOpenFor,
+  payrollFilingsAllowed,
   PAYROLL_STATUS_LABEL,
   type PaymentDetails,
   type PayrollMethod,
@@ -215,10 +216,14 @@ export async function submitPayroll(
   const period = await ensureCurrentPeriod(prisma, now);
   const label = payrollPeriodLabel(period.year, period.month);
 
-  const existing = await prisma.payrollSubmission.findUnique({
-    where: { userId_periodId: { userId, periodId: period.id } },
+  // The month's current request: its latest filing. Only someone allowed a
+  // second request (PAYROLL_EXTRA_FILINGS) ever has more than one.
+  const existing = await prisma.payrollSubmission.findFirst({
+    where: { userId, periodId: period.id },
+    orderBy: { filing: "desc" },
     select: {
       id: true,
+      filing: true,
       status: true,
       resubmitDeadline: true,
       parts: { select: { paidAt: true } },
@@ -236,8 +241,15 @@ export async function submitPayroll(
   // moment an admin declines or approves, it shuts early — a decline has its
   // own timed resubmit path, and an approval can't be silently altered
   // underneath the person who gave it.
+  // A further request for a month already filed: only by exception, and only
+  // once the one before it is paid, so the bonuses and fines it snapshots are
+  // ones that request didn't already settle.
+  const filingAgain =
+    existing?.status === "PROCESSED" &&
+    existing.filing < payrollFilingsAllowed(session.user.email, period);
+  const filing = existing && filingAgain ? existing.filing + 1 : 1;
   let mode: "create" | "resubmit" | "edit";
-  if (!existing) {
+  if (!existing || filingAgain) {
     if (filingWindow === "BEFORE") {
       return fail(
         `Filing for ${label} opens ${formatTashkent(period.filingOpensAt)} — the request pulls in the whole month, so it can't be filed before the month is nearly over.`,
@@ -352,6 +364,14 @@ export async function submitPayroll(
     : landsOn === "SUBMITTED"
       ? "No department lead to approve this — filed straight to finance."
       : null;
+  // Said on the request's own trail, so a second request for the same month
+  // isn't read later as a duplicate somebody missed.
+  const filingNote =
+    filing > 1
+      ? [`Request ${filing} for ${label}, allowed as an exception.`, skipNote]
+          .filter(Boolean)
+          .join(" ")
+      : skipNote;
   // Who is waiting on whom, for the hand-off below: each lead hears about the
   // part (or parts) that are theirs to approve, not the whole request.
   const partsByApprover = new Map<string, ParsedPart[]>();
@@ -370,6 +390,7 @@ export async function submitPayroll(
   // ----- Write it all atomically -----
 
   let netTotal = 0;
+  let filedId: string | null = null;
   try {
     await prisma.$transaction(async (tx) => {
       // Serialize this person's filings before reading anything. Every check
@@ -445,7 +466,7 @@ export async function submitPayroll(
       let submissionId: string;
       if (mode === "create") {
         const created = await tx.payrollSubmission.create({
-          data: { userId, periodId: period.id, status: "DRAFT", ...money },
+          data: { userId, periodId: period.id, filing, status: "DRAFT", ...money },
           select: { id: true },
         });
         submissionId = created.id;
@@ -454,7 +475,7 @@ export async function submitPayroll(
           from: "DRAFT",
           to: landsOn,
           actorId: userId,
-          note: skipNote,
+          note: filingNote,
           data: { submittedAt: now, lastSubmittedAt: now },
         });
       } else {
@@ -561,6 +582,8 @@ export async function submitPayroll(
         }
       }
 
+      filedId = submissionId;
+
       // Invoice number: this person's Nth request ever, stable across
       // regenerations (createdAt order, not status).
       const created = await tx.payrollSubmission.findUniqueOrThrow({
@@ -639,7 +662,8 @@ export async function submitPayroll(
     });
   } catch (e) {
     if (e instanceof SubmitError) return fail(e.message);
-    // Two tabs racing the same filing hit the (userId, periodId) unique key.
+    // Two tabs racing the same filing hit the (userId, periodId, filing)
+    // unique key.
     if (typeof e === "object" && e !== null && "code" in e && e.code === "P2002") {
       return fail(`You've already filed for ${label} — reload to see it.`);
     }
@@ -655,10 +679,12 @@ export async function submitPayroll(
   // approval (./team/actions.ts) — so finance's inbox holds only requests it
   // can actually pay.
   const who = me.name ?? me.email ?? "Someone";
-  const pdf = await prisma.payrollPdf.findFirst({
-    where: { submission: { userId, periodId: period.id } },
-    select: { bytes: true },
-  });
+  const pdf = filedId
+    ? await prisma.payrollPdf.findUnique({
+        where: { submissionId: filedId },
+        select: { bytes: true },
+      })
+    : null;
   const attachments = pdf
     ? [{ filename: `${who} — ${label}.pdf`, bytes: pdf.bytes }]
     : undefined;
