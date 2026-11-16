@@ -10,7 +10,11 @@ import { BonusControls } from "@/app/_components/BonusControls";
 import { Picker } from "@/app/_components/Picker";
 import { TrashIcon } from "../../dashboard/_components/icons";
 import { addBonus, addManualPenalty, assignTask } from "../../admin/actions";
-import { addDepartmentMember, removeDepartmentMember } from "../actions";
+import {
+  addDepartmentMember,
+  deleteMemberAccount,
+  removeDepartmentMember,
+} from "../actions";
 
 export type LeadMember = {
   id: string;
@@ -33,6 +37,12 @@ export type LeadMember = {
    * server-side, so a button can't offer what the action would refuse.
    */
   canMoney: boolean;
+  /**
+   * Whether the viewer may delete this person's whole account: every seat
+   * they hold is a member seat under the viewer (canDeleteAccount in
+   * lib/manage.ts, re-checked by the action).
+   */
+  canDelete: boolean;
   goalCount: number;
   weekPercent: number;
   submittedAtLabel: string | null;
@@ -158,7 +168,9 @@ function MemberRow({
   department: LeadDepartment;
 }) {
   const [panel, setPanel] = useState<Panel>(null);
-  const [confirmingRemove, setConfirmingRemove] = useState(false);
+  // The trash icon opens "menu" (remove the seat, or delete the account);
+  // deleting the account is permanent, so it asks once more ("delete").
+  const [confirm, setConfirm] = useState<null | "menu" | "delete">(null);
   const [removeError, setRemoveError] = useState<string | null>(null);
   const [removing, startRemove] = useTransition();
 
@@ -170,14 +182,14 @@ function MemberRow({
   // rule removeDepartmentMember enforces server-side.
   const removable = !p.lead && !p.isSelf;
 
-  function remove() {
+  function run(action: () => Promise<void>) {
     setRemoveError(null);
     startRemove(async () => {
       try {
-        await removeDepartmentMember(p.id, department.id);
+        await action();
       } catch (e) {
         setRemoveError(e instanceof Error ? e.message : "That didn't work.");
-        setConfirmingRemove(false);
+        setConfirm(null);
       }
     });
   }
@@ -232,7 +244,7 @@ function MemberRow({
         {/* Only the controls this row actually permits. A peer lead's row has
             none; the viewer's own has Fine and Bonus but no Assign. Rendering
             a disabled button would advertise a power that isn't there. */}
-        {(p.canAssign || p.canMoney || removable) && (
+        {(p.canAssign || p.canMoney || removable || p.canDelete) && (
           <div className="flex shrink-0 items-center gap-2">
             {p.canAssign && (
               <button
@@ -264,21 +276,50 @@ function MemberRow({
                 </button>
               </>
             )}
-            {removable &&
-              (confirmingRemove ? (
+            {(removable || p.canDelete) &&
+              (confirm ? (
                 <span className="flex items-center gap-1.5">
+                  {confirm === "delete" ? (
+                    <button
+                      type="button"
+                      disabled={removing}
+                      onClick={() => run(() => deleteMemberAccount(p.id))}
+                      title={`Permanently delete ${p.name}'s account and history`}
+                      className="whitespace-nowrap rounded-lg bg-red-500 px-2.5 py-1 text-xs font-semibold text-white transition hover:bg-red-600 disabled:opacity-50"
+                    >
+                      {removing ? "Deleting…" : "Delete for good"}
+                    </button>
+                  ) : (
+                    <>
+                      {removable && (
+                        <button
+                          type="button"
+                          disabled={removing}
+                          onClick={() =>
+                            run(() => removeDepartmentMember(p.id, department.id))
+                          }
+                          className="whitespace-nowrap rounded-lg bg-red-500 px-2.5 py-1 text-xs font-semibold text-white transition hover:bg-red-600 disabled:opacity-50"
+                        >
+                          {removing ? "Removing…" : "Remove"}
+                        </button>
+                      )}
+                      {p.canDelete && (
+                        <button
+                          type="button"
+                          disabled={removing}
+                          onClick={() => setConfirm("delete")}
+                          title={`Delete ${p.name}'s account, not just their seat`}
+                          className="whitespace-nowrap rounded-lg border border-red-200 px-2.5 py-1 text-xs font-medium text-red-600 transition hover:bg-red-50 disabled:opacity-50"
+                        >
+                          Delete account
+                        </button>
+                      )}
+                    </>
+                  )}
                   <button
                     type="button"
                     disabled={removing}
-                    onClick={remove}
-                    className="whitespace-nowrap rounded-lg bg-red-500 px-2.5 py-1 text-xs font-semibold text-white transition hover:bg-red-600 disabled:opacity-50"
-                  >
-                    {removing ? "Removing…" : "Remove"}
-                  </button>
-                  <button
-                    type="button"
-                    disabled={removing}
-                    onClick={() => setConfirmingRemove(false)}
+                    onClick={() => setConfirm(null)}
                     className="rounded-lg px-2 py-1 text-xs font-medium text-muted-fg transition hover:bg-canvas"
                   >
                     Cancel
@@ -287,7 +328,7 @@ function MemberRow({
               ) : (
                 <button
                   type="button"
-                  onClick={() => setConfirmingRemove(true)}
+                  onClick={() => setConfirm("menu")}
                   title={`Remove ${p.name} from ${department.name}`}
                   aria-label={`Remove ${p.name} from ${department.name}`}
                   className="rounded-lg p-1.5 text-muted-fg transition hover:bg-red-500/10 hover:text-red-600"

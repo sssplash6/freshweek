@@ -6,6 +6,8 @@ import { prisma } from "@/lib/prisma";
 import { isAdmin } from "@/lib/admin";
 import { isApprovedUser } from "@/lib/approval";
 import { notify } from "@/lib/notifications";
+import { canDeleteAccount } from "@/lib/manage";
+import { ledDepartmentIds } from "@/lib/payrollParts";
 
 /**
  * Only department leads and admins review sign-ups. Returns the reviewer's
@@ -72,8 +74,9 @@ export async function approveSignup(userId: string) {
 
 /**
  * Turn a pending sign-up away — deletes the account. Deliberately refuses to
- * touch anyone already approved (removing a real teammate stays an admin-only
- * act on /admin). If the same person signs in again a fresh request appears.
+ * touch anyone already approved (removing a real teammate is deleteUser on
+ * /admin, or deleteMemberAccount below for a lead's own members). If the same
+ * person signs in again a fresh request appears.
  *
  * ADMIN ONLY, unlike approval. A pending account has no department yet —
  * memberships are created during onboarding, which is itself behind the
@@ -95,7 +98,7 @@ export async function rejectSignup(userId: string) {
   });
   if (!target) return; // already gone
   if (target.approvedAt != null) {
-    throw new Error("This account is already approved — only an admin can remove it.");
+    throw new Error("This account is already approved. Delete it from the admin panel or its lead's department page.");
   }
 
   await prisma.user.delete({ where: { id: userId } });
@@ -230,4 +233,37 @@ export async function removeDepartmentMember(
     );
   });
   revalidateMembershipViews();
+}
+
+/**
+ * Delete a member's whole account (weeks, fines, bonuses, pay requests all
+ * cascade), for someone who has left rather than just changed teams. Who may
+ * is canDeleteAccount in lib/manage.ts, the same check that shows the button.
+ */
+export async function deleteMemberAccount(userId: string) {
+  const session = await auth();
+  if (!session?.user?.id) throw new Error("Not authenticated");
+  const actor = { id: session.user.id, email: session.user.email };
+
+  const [ledIds, target] = await Promise.all([
+    ledDepartmentIds(prisma, actor.id),
+    prisma.user.findUnique({
+      where: { id: userId },
+      select: {
+        id: true,
+        email: true,
+        memberships: { select: { departmentId: true, role: true } },
+      },
+    }),
+  ]);
+  if (!target) return; // already gone
+  if (!canDeleteAccount(actor, ledIds, { ...target, seats: target.memberships })) {
+    throw new Error(
+      "You can only delete someone whose every department you lead. Remove them from yours instead, or ask an admin.",
+    );
+  }
+
+  await prisma.user.delete({ where: { id: userId } });
+  revalidateMembershipViews();
+  revalidatePath("/penalties");
 }

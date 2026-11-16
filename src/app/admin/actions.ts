@@ -27,6 +27,8 @@ import type { Prisma } from "@/generated/prisma/client";
 /**
  * Permanently delete a user and everything cascaded from them (weeks, goals,
  * subtasks, shares, sessions). Admin-only; you can't delete your own account.
+ * Leads have a narrower version for their own members: deleteMemberAccount in
+ * app/department/actions.ts.
  */
 export async function deleteUser(userId: string) {
   const session = await auth();

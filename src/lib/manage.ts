@@ -83,3 +83,33 @@ export async function requireCanManage(
     throw new Error("Not authorized");
   }
 }
+
+/**
+ * Whether the actor may delete this person's whole account, the step past
+ * removing a seat. It is irreversible and org-wide, so a lead's reach is
+ * narrower than for the powers above: every seat the target holds must be a
+ * MEMBER seat in a department the actor leads, so a peer lead, someone who
+ * also sits in another lead's team, or an admin never vanishes from under
+ * anyone. `ledIds` is the actor's NORMAL led departments (ledDepartmentIds in
+ * lib/payrollParts.ts): a mini head is self-appointed, so that seat confers
+ * nothing here. Admins pass for anyone but themselves, as on /admin.
+ */
+export function canDeleteAccount(
+  actor: Actor,
+  ledIds: ReadonlySet<string>,
+  target: {
+    id: string;
+    email: string | null;
+    seats: { departmentId: string; role: string }[];
+  },
+): boolean {
+  if (target.id === actor.id) return false;
+  if (isAdmin(actor.email)) return true;
+  return (
+    !isAdmin(target.email) &&
+    target.seats.length > 0 &&
+    target.seats.every(
+      (s) => s.role === "MEMBER" && ledIds.has(s.departmentId),
+    )
+  );
+}

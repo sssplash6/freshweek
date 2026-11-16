@@ -7,7 +7,7 @@ import { auth } from "@/auth";
 import { assertApproved } from "@/lib/approval";
 import { prisma } from "@/lib/prisma";
 import { isAdmin } from "@/lib/admin";
-import { manageableUserIds } from "@/lib/manage";
+import { canDeleteAccount, manageableUserIds } from "@/lib/manage";
 import { resolveAvatar } from "@/lib/avatar";
 import { weekPercent } from "@/lib/progress";
 import { formatDateTimeTz } from "@/lib/dates";
@@ -69,6 +69,9 @@ export default async function DepartmentPanelPage() {
                   name: true,
                   email: true,
                   avatar: true,
+                  // Every seat they hold, for canDeleteAccount: deleting an
+                  // account is only offered when all of them are yours.
+                  memberships: { select: { departmentId: true, role: true } },
                   weeks: {
                     where: { isCurrent: true },
                     select: {
@@ -149,9 +152,10 @@ export default async function DepartmentPanelPage() {
   // and bonus themselves, but not assign themselves a task. Same function,
   // same flag the actions pass.
   const actor = { id: userId, email: session.user.email };
-  const [assignScope, moneyScope] = await Promise.all([
+  const [assignScope, moneyScope, deleteLedIds] = await Promise.all([
     manageableUserIds(actor),
     manageableUserIds(actor, { allowSelf: true }),
+    ledDepartmentIds(prisma, userId),
   ]);
 
   const pending = pendingUsers.map((u) => {
@@ -189,6 +193,11 @@ export default async function DepartmentPanelPage() {
         isSelf: u.id === userId,
         canAssign: assignScope === "all" || assignScope.has(u.id),
         canMoney: moneyScope === "all" || moneyScope.has(u.id),
+        canDelete: canDeleteAccount(actor, deleteLedIds, {
+          id: u.id,
+          email: u.email,
+          seats: u.memberships,
+        }),
         goalCount: week?.goals.length ?? 0,
         weekPercent: week ? weekPercent(week.goals) : 0,
         submittedAtLabel: week?.submittedAt
