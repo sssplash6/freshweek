@@ -245,7 +245,7 @@ function MemberRow({
             none; the viewer's own has Fine and Bonus but no Assign. Rendering
             a disabled button would advertise a power that isn't there. */}
         {(p.canAssign || p.canMoney || removable || p.canDelete) && (
-          <div className="flex shrink-0 items-center gap-2">
+          <div className="flex max-w-full shrink-0 flex-wrap items-center justify-end gap-2">
             {p.canAssign && (
               <button
                 type="button"
