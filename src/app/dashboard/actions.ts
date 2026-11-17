@@ -35,6 +35,7 @@ import {
   requireText,
 } from "@/lib/goals";
 import { notify } from "@/lib/notifications";
+import { hasNotepad, NOTEPAD_MAX } from "@/lib/notepad";
 import { formatYmd, parseYmd, toYmd } from "@/lib/dates";
 
 async function requireUserId(): Promise<string> {
@@ -1249,5 +1250,26 @@ export async function saveBirthday(ymd: string): Promise<ActionResult> {
     revalidatePath("/dashboard");
     revalidatePath("/profile");
     revalidatePath("/team");
+  });
+}
+
+/**
+ * Save the signed-in person's notepad (lib/notepad.ts). Autosaved from the
+ * card as they type, so it doesn't revalidate: the card already holds the
+ * text, and re-rendering the whole dashboard on every pause would be waste.
+ */
+export async function saveNotepad(body: string): Promise<ActionResult> {
+  return actionResult(async () => {
+    const { id, email } = await requireUser();
+    if (!hasNotepad(email)) throw new ActionError("There's no notepad on this account.");
+    if (typeof body !== "string") throw new ActionError("That note couldn't be read.");
+    if (body.length > NOTEPAD_MAX) {
+      throw new ActionError(`Notes are capped at ${NOTEPAD_MAX.toLocaleString("en-US")} characters.`);
+    }
+    await prisma.notepad.upsert({
+      where: { userId: id },
+      create: { userId: id, body },
+      update: { body },
+    });
   });
 }

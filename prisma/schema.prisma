@@ -127,6 +127,7 @@ model User {
   goalSharesSent     GoalShare[] @relation("GoalSharesFrom")
   goalSharesReceived GoalShare[] @relation("GoalSharesTo")
   feedback       Feedback[]
+  notepad        Notepad?
 
   dayTasks         DayTask[]
   dailyReports     DailyReport[]
@@ -599,6 +600,17 @@ model DayTask {
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId, date])
+}
+
+// A private free-text notepad, shown in the dashboard's right column to the
+// accounts in lib/notepad.ts. One per person; only its owner reads or writes
+// it. Its own table so the text never rides along on a User read.
+model Notepad {
+  userId    String   @id
+  body      String   @default("")
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
 
 // A delegation of a subtask from one user to another. The original stays on the

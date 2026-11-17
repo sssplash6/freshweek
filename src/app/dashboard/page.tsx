@@ -94,6 +94,8 @@ import {
   type TodaysReportRow,
 } from "./_components/TodaysReports";
 import { AssignedByMe } from "./_components/AssignedByMe";
+import { Notepad } from "./_components/Notepad";
+import { hasNotepad } from "@/lib/notepad";
 import { PeriodToggle } from "./_components/PeriodToggle";
 import { PENALTY_LABEL } from "@/lib/penalties";
 
@@ -606,6 +608,17 @@ export default async function DashboardPage({
     return { id: g.id, title: g.title, percent, done: percent === 100 };
   });
 
+  // The private notepad in the right column, for the accounts in
+  // lib/notepad.ts only.
+  const notepad = hasNotepad(session!.user.email)
+    ? ((
+        await prisma.notepad.findUnique({
+          where: { userId },
+          select: { body: true },
+        })
+      )?.body ?? "")
+    : null;
+
   // A pay request filed before the card/bank fields existed has nothing
   // finance can pay from, and nothing tells the filer. The dashboard is where
   // everyone lands, so the ask happens here as well as on /payroll.
@@ -919,6 +932,12 @@ export default async function DashboardPage({
         </div>
       )}
 
+      {notepad != null && (
+        <div className="mb-5 xl:hidden">
+          <Notepad initial={notepad} />
+        </div>
+      )}
+
       {assignedTaskViews.length > 0 && (
         <section className="mb-6">
           <div className="mb-3 flex items-center gap-2">
@@ -1063,9 +1082,12 @@ export default async function DashboardPage({
 
       {/* Mounted only when it has something to hold: an empty 16rem column
           would sit there pulling the centred main content off to the left. */}
-      {(assignedByMeViews.length > 0 || birthdaysToday.length > 0) && (
+      {(assignedByMeViews.length > 0 ||
+        birthdaysToday.length > 0 ||
+        notepad != null) && (
         <aside className="hidden w-64 shrink-0 xl:block">
           <div className="sticky top-8 flex flex-col gap-6">
+            {notepad != null && <Notepad initial={notepad} />}
             {assignedByMeViews.length > 0 && (
               <AssignedByMe items={assignedByMeViews} />
             )}
