@@ -175,6 +175,40 @@ export function movesToNextWeek(
   );
 }
 
+/**
+ * Pick one person's two cycle weeks out of their recent ones, split at this
+ * cycle's Sunday deadline (`cutoff`, see currentSubmissionCycle): `current` is
+ * the earliest week starting on or after it (the week this cycle is about;
+ * anyone reporting ahead also has later ones, which must never win), and
+ * `previous` the latest one before it. A redeploy race can leave a stray
+ * duplicate for a cycle, so on an identical start a submitted week beats an
+ * unsubmitted one: someone who actually reported never reads as "not
+ * submitted". Shared by the admin tabs and the goals PDF so they agree.
+ */
+export function cycleWeeks<W extends { startDate: Date; submittedAt: Date | null }>(
+  weeks: W[],
+  cutoff: Date,
+): { current: W | null; previous: W | null } {
+  const at = cutoff.getTime();
+  const submittedFirst = (a: W, b: W) =>
+    Number(b.submittedAt != null) - Number(a.submittedAt != null);
+  const current =
+    weeks
+      .filter((w) => w.startDate.getTime() >= at)
+      .sort(
+        (a, b) =>
+          a.startDate.getTime() - b.startDate.getTime() || submittedFirst(a, b),
+      )[0] ?? null;
+  const previous =
+    weeks
+      .filter((w) => w.startDate.getTime() < at)
+      .sort(
+        (a, b) =>
+          b.startDate.getTime() - a.startDate.getTime() || submittedFirst(a, b),
+      )[0] ?? null;
+  return { current, previous };
+}
+
 export type CurrentWeek = Awaited<ReturnType<typeof getOrCreateCurrentWeek>>;
 export type WeekGoal = CurrentWeek["goals"][number];
 export type GoalSubtask = WeekGoal["subtasks"][number];

@@ -8,7 +8,7 @@ import { assertApproved } from "@/lib/approval";
 import { prisma } from "@/lib/prisma";
 import { isAdmin } from "@/lib/admin";
 import { goalPercent, isGoalComplete, weekPercent } from "@/lib/progress";
-import { getWeekBounds } from "@/lib/weeks";
+import { cycleWeeks, getWeekBounds } from "@/lib/weeks";
 import { currentMeetingSlot } from "@/lib/meetings";
 import { currentSubmissionCycle } from "@/lib/lateness";
 import { reconcileSubmissionFines } from "@/lib/submissionFines";
@@ -476,34 +476,13 @@ export default async function AdminPage({
   // The week split is anchored to the Sunday 12:00 deadline (see the cycle
   // computed above): weeks starting on/after it are "current"; earlier ones are
   // "previous". Comparing against the deadline instant (not the Monday) keeps
-  // this robust to how week bounds are stored.
+  // this robust to how week bounds are stored. lib/weeks.ts cycleWeeks has the
+  // tie-breaks; the goals PDF uses the same call.
   const cutoff = cycle.submissionDeadline.getTime();
-  // The earliest week starting on/after the cutoff — the one this cycle is about.
-  // Someone who reports ahead also has later weeks past the cutoff; those are
-  // next week's, so they must never win here (sorting by submittedAt did let a
-  // week reported far in advance take this slot). A redeploy race can leave a
-  // stray duplicate week for a cycle, so on an identical start date a submitted
-  // week beats an unsubmitted duplicate — someone who actually reported never
-  // reads as "not submitted".
-  const currentWeekOf = (weeks: (typeof rawUsers)[number]["weeks"]) => {
-    const cur = weeks.filter((w) => w.startDate.getTime() >= cutoff);
-    if (cur.length === 0) return null;
-    return cur.sort(
-      (a, b) =>
-        a.startDate.getTime() - b.startDate.getTime() ||
-        Number(b.submittedAt != null) - Number(a.submittedAt != null),
-    )[0];
-  };
-  const previousWeekOf = (weeks: (typeof rawUsers)[number]["weeks"]) => {
-    const prev = weeks.filter((w) => w.startDate.getTime() < cutoff);
-    if (prev.length === 0) return null;
-    // Most recent previous week; a submitted duplicate wins a same-date tie.
-    return prev.sort(
-      (a, b) =>
-        b.startDate.getTime() - a.startDate.getTime() ||
-        Number(b.submittedAt != null) - Number(a.submittedAt != null),
-    )[0];
-  };
+  const currentWeekOf = (weeks: (typeof rawUsers)[number]["weeks"]) =>
+    cycleWeeks(weeks, cycle.submissionDeadline).current;
+  const previousWeekOf = (weeks: (typeof rawUsers)[number]["weeks"]) =>
+    cycleWeeks(weeks, cycle.submissionDeadline).previous;
 
   // Current week = the week people must have goals in for this cycle.
   const usersCurrentWeek = rawUsers.map((u) => {
@@ -671,6 +650,30 @@ export default async function AdminPage({
           <p className="mt-1 text-sm text-muted-fg">{subtitle}</p>
         </div>
         <div className="flex shrink-0 items-center gap-2">
+          {/* A plain link: the route answers with a PDF, not a page. */}
+          <a
+            href="/admin/goals-report"
+            target="_blank"
+            rel="noopener"
+            title="Previous and new week goals for everyone, as a PDF"
+            className="inline-flex shrink-0 items-center gap-2 whitespace-nowrap rounded-lg border border-line bg-surface px-4 py-2 text-sm font-medium text-ink transition hover:border-brand/40 hover:bg-canvas hover:text-brand"
+          >
+            <svg
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              className="h-4 w-4"
+              aria-hidden="true"
+            >
+              <path d="M12 3v12" />
+              <path d="m7 10 5 5 5-5" />
+              <path d="M5 21h14" />
+            </svg>
+            Goals PDF
+          </a>
           <Link
             href="/departments"
             className="inline-flex shrink-0 items-center gap-2 whitespace-nowrap rounded-lg border border-line bg-surface px-4 py-2 text-sm font-medium text-ink transition hover:border-brand/40 hover:bg-canvas hover:text-brand"

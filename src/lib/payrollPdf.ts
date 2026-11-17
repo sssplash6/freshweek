@@ -104,8 +104,26 @@ function truncate(font: PDFFont, text: string, size: number, maxWidth: number): 
   return `${cut.trimEnd()}...`;
 }
 
-function wrap(font: PDFFont, text: string, size: number, maxWidth: number): string[] {
-  const words = text.split(/\s+/).filter(Boolean);
+/**
+ * Break text into lines no wider than `maxWidth`. A single word wider than
+ * the line (a pasted URL, say) is cut by character rather than overflowing.
+ * Also used by the goals report (lib/goalsReportPdf.ts).
+ */
+export function wrap(font: PDFFont, text: string, size: number, maxWidth: number): string[] {
+  const words = text.split(/\s+/).filter(Boolean).flatMap((word) => {
+    if (font.widthOfTextAtSize(word, size) <= maxWidth) return [word];
+    const pieces: string[] = [];
+    let piece = "";
+    for (const ch of word) {
+      if (piece && font.widthOfTextAtSize(piece + ch, size) > maxWidth) {
+        pieces.push(piece);
+        piece = "";
+      }
+      piece += ch;
+    }
+    if (piece) pieces.push(piece);
+    return pieces;
+  });
   const lines: string[] = [];
   let line = "";
   for (const word of words) {
@@ -129,7 +147,7 @@ let assetsPromise: Promise<{
   logo: Uint8Array;
 }> | null = null;
 
-function loadAssets() {
+export function loadAssets() {
   assetsPromise ??= (async () => {
     const fontsDir = path.join(process.cwd(), "node_modules", "dejavu-fonts-ttf", "ttf");
     const [regular, bold, logo] = await Promise.all([
