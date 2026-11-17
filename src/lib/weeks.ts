@@ -1,4 +1,5 @@
 import { prisma } from "@/lib/prisma";
+import { goalPercent, isGoalComplete } from "@/lib/progress";
 
 /**
  * Monday 00:00 UTC and the following Sunday 23:59:59.999 UTC for the week
@@ -143,6 +144,35 @@ export async function getArchivedWeeks(userId: string) {
       },
     },
   });
+}
+
+/**
+ * Whether closing a week hands this goal on to the next week instead of
+ * archiving it: something delegated in (a whole goal, or a goal made to hold a
+ * delegated subtask) after the next week had already opened. A Saturday
+ * delegation is meant for the coming week, but if the recipient hadn't rolled
+ * over yet it lands in the old one; asking them for a reflection on work they
+ * got a day before the close, then copying it forward without its "From X"
+ * link, was the wrong answer. Finished ones archive as usual.
+ */
+export function movesToNextWeek(
+  goal: {
+    createdAt: Date;
+    completedAt: Date | null;
+    manualPercent: number | null;
+    shareIn: unknown;
+    subtasks: { isDone: boolean; shareIn: unknown }[];
+  },
+  nextWeekOpensAt: Date,
+): boolean {
+  const delegatedIn =
+    goal.shareIn != null || goal.subtasks.some((s) => s.shareIn != null);
+  return (
+    delegatedIn &&
+    goal.createdAt.getTime() >= nextWeekOpensAt.getTime() &&
+    !isGoalComplete(goal) &&
+    goalPercent(goal) < 100
+  );
 }
 
 export type CurrentWeek = Awaited<ReturnType<typeof getOrCreateCurrentWeek>>;

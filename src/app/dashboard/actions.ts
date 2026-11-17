@@ -9,7 +9,11 @@ import {
   actionResult,
   type ActionResult,
 } from "@/lib/actionResult";
-import { getOrCreateCurrentWeek, nextWeekBounds } from "@/lib/weeks";
+import {
+  getOrCreateCurrentWeek,
+  movesToNextWeek,
+  nextWeekBounds,
+} from "@/lib/weeks";
 import { getOrCreateCurrentMonth, nextMonthBounds } from "@/lib/months";
 import { submissionTiming, weekOpensAt } from "@/lib/lateness";
 import { submissionOffsetHours } from "@/lib/submissionClock";
@@ -797,9 +801,19 @@ export async function startNewWeek(
     ]),
   );
 
+  // Delegations that arrived after the next week opened move into it as they
+  // are, share link and all (see movesToNextWeek). Judged against the default
+  // next week, not a custom range, so the dialog asks for the same reasons.
+  const nextOpensAt = weekOpensAt(nextWeekBounds(week.endDate).start, offsetHours);
+  const handedOn = new Set(
+    week.goals.filter((g) => movesToNextWeek(g, nextOpensAt)).map((g) => g.id),
+  );
+
   // Goals below 100% require a reason before the week can close — including ones
   // marked complete at a partial rate, not just unfinished ones.
-  const incomplete = week.goals.filter((g) => needsCompletionReason(g));
+  const incomplete = week.goals.filter(
+    (g) => !handedOn.has(g.id) && needsCompletionReason(g),
+  );
   for (const goal of incomplete) {
     if (!reasonByGoal.get(goal.id)) {
       throw new Error("A reason is required for every goal below 100%.");
@@ -819,7 +833,9 @@ export async function startNewWeek(
   const carryPlan: { goal: (typeof week.goals)[number]; deadline: Date }[] = [];
   for (const c of carry) {
     const goal = weekGoalById.get(c.goalId);
-    if (!goal) continue; // ignore anything not in the closing week
+    // Ignore anything not in the closing week, and handed-on goals, which
+    // move whole rather than being copied.
+    if (!goal || handedOn.has(goal.id)) continue;
     const deadline = parseYmd(c.deadline);
     if (!deadline) {
       throw new Error("Invalid carry-over deadline");
@@ -915,6 +931,13 @@ export async function startNewWeek(
     // $40 if still unsubmitted at the Monday meeting — so no-shows are
     // caught too, not just people who eventually close late. `submittedLate`
     // above is still recorded for the admin "Late" badge.
+
+    if (handedOn.size > 0) {
+      await tx.goal.updateMany({
+        where: { id: { in: [...handedOn] } },
+        data: { weekId: newWeek.id },
+      });
+    }
 
     // Copy carried goals into the new week — title, priority, the fresh deadline,
     // and their subtasks (done-state preserved so progress continues).

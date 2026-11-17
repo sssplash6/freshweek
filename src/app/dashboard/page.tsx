@@ -14,6 +14,7 @@ import {
   getArchivedWeeks,
   getOrCreateCurrentWeek,
   getWeekBounds,
+  movesToNextWeek,
   nextWeekBounds,
   weekInclude,
 } from "@/lib/weeks";
@@ -578,15 +579,29 @@ export default async function DashboardPage({
     ? formatDateTimeTz(period.submittedAt)
     : null;
 
+  // When the next week opens: Friday noon of the week before it, on the
+  // viewer's own clock. Gates the close button below, and decides which late
+  // delegations ride along into the new week (movesToNextWeek, the same rule
+  // startNewWeek applies), so the close dialog neither asks a reason for them
+  // nor offers to copy them.
+  const nextWeek = nextWeekBounds(period.endDate);
+  const nextWeekOpens = weekOpensAt(
+    nextWeek.start,
+    submissionOffsetHours(session!.user.email),
+  );
+  const closingGoals = isMonth
+    ? period.goals
+    : period.goals.filter((g) => !movesToNextWeek(g, nextWeekOpens));
+
   // Every goal below 100% at close needs a reflection reason — including ones
   // marked complete at a partial rate, not just unfinished ones.
-  const incompleteGoals = period.goals
+  const incompleteGoals = closingGoals
     .filter((g) => needsCompletionReason(g))
     .map((g) => ({ id: g.id, title: g.title, percent: goalPercent(g) }));
 
   // Candidates to carry into the new week — every current goal, with unfinished
   // ones pre-checked in the Start-new-week dialog.
-  const carryGoals = period.goals.map((g) => {
+  const carryGoals = closingGoals.map((g) => {
     const percent = goalPercent(g);
     return { id: g.id, title: g.title, percent, done: percent === 100 };
   });
@@ -635,7 +650,6 @@ export default async function DashboardPage({
 
   // Default date range for the next week (editable in the Start-new-week
   // dialog); the next month is fixed — always the following calendar month.
-  const nextWeek = nextWeekBounds(period.endDate);
   const defaultWeekStart = toLocalYmd(nextWeek.start);
   const defaultWeekEnd = toLocalYmd(nextWeek.end);
   const nextMonthName = monthLabel(nextMonthBounds(period.endDate).start);
@@ -645,9 +659,7 @@ export default async function DashboardPage({
   // and spend the rest of the cycle a week ahead of the team (see weekOpensAt;
   // the same rule is enforced in startNewWeek). Anyone catching up on an
   // overdue week is already past their Friday, so this never blocks them.
-  const canStartNextWeek =
-    now.getTime() >=
-    weekOpensAt(nextWeek.start, submissionOffsetHours(session!.user.email)).getTime();
+  const canStartNextWeek = now.getTime() >= nextWeekOpens.getTime();
   // The Friday the window opens: three days before the new week's Monday.
   const opensOnLabel = formatYmd(
     toLocalYmd(new Date(nextWeek.start.getTime() - 3 * 86_400_000)),
