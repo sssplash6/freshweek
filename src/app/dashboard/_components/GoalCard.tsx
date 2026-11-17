@@ -807,15 +807,23 @@ function SharePicker({
   showLabel?: boolean;
 }) {
   const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
   const [isPending, startTransition] = useTransition();
   const ref = useRef<HTMLDivElement>(null);
   useDismissible(open, () => setOpen(false), ref);
 
+  // Search only: the full team is too long to scroll, so nothing is listed
+  // until a name is typed.
+  const q = query.trim().toLowerCase();
+  const matches = q
+    ? team.filter((m) => m.name.toLowerCase().includes(q)).slice(0, 8)
+    : [];
+
   function share(toUserId: string) {
     startTransition(async () => {
-      // Delegation can legitimately refuse — an unapproved recipient, a period
-      // they've already submitted — so the refusal has to reach the card
-      // rather than bubble out of the transition.
+      // Delegation can legitimately refuse (an unapproved recipient, say), so
+      // the refusal has to reach the card rather than bubble out of the
+      // transition.
       try {
         const result = await onShare(toUserId);
         if (!result.ok) onError(result.error);
@@ -823,6 +831,7 @@ function SharePicker({
         onError(e);
       }
       setOpen(false);
+      setQuery("");
     });
   }
 
@@ -846,19 +855,31 @@ function SharePicker({
 
       {open && (
         <div
-          className={`pop-in absolute z-10 mt-1 w-52 rounded-xl border border-line bg-surface p-1 shadow-lg ${
+          className={`pop-in absolute z-10 mt-1 w-60 rounded-xl border border-line bg-surface p-1 shadow-lg ${
             align === "left" ? "left-0" : "right-0"
           }`}
         >
-          <p className="px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-fg">
-            Delegate to
-          </p>
-          {team.length === 0 && (
-            <p className="px-3 py-2 text-sm text-muted-fg">
-              No teammates yet.
+          <input
+            autoFocus
+            type="text"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key !== "Enter") return;
+              e.preventDefault();
+              const first = matches.find((m) => !alreadyShared.includes(m.name));
+              if (first && !isPending) share(first.id);
+            }}
+            placeholder="Delegate to… type a name"
+            aria-label="Search teammates"
+            className="w-full rounded-lg border border-line px-3 py-2 text-sm text-ink placeholder:text-muted-fg focus:border-brand focus:outline-none"
+          />
+          {q && matches.length === 0 && (
+            <p className="px-3 py-2 text-xs text-muted-fg">
+              {`No one matches “${query.trim()}”.`}
             </p>
           )}
-          {team.map((m) => {
+          {matches.map((m) => {
             const done = alreadyShared.includes(m.name);
             return (
               <button

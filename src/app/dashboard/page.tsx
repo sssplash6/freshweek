@@ -343,8 +343,10 @@ export default async function DashboardPage({
     unreadCount,
   ] = await Promise.all([
       isMonth ? getOrCreateCurrentMonth(userId) : getOrCreateCurrentWeek(userId),
+      // Delegation and assign pickers. A pending sign-up can't reach the
+      // dashboard, so nothing sent to them would ever be seen: leave them out.
       prisma.user.findMany({
-        where: { id: { not: userId } },
+        where: { id: { not: userId }, approvedAt: { not: null } },
         select: { id: true, name: true, email: true },
         orderBy: [{ name: "asc" }, { email: "asc" }],
       }),
