@@ -72,19 +72,6 @@ async function requireShareRecipient(toUserId: string) {
   return recipient;
 }
 
-/**
- * Refuse to write into a period its owner has already submitted. The sender
- * can't see the recipient's lock, so this is the only place it can be caught —
- * without it a delegation silently edits a period that is closed for its owner.
- */
-function assertRecipientPeriodOpen(period: { goalsLocked: boolean }) {
-  if (period.goalsLocked) {
-    throw new ActionError(
-      "They've already submitted this period — it can't take anything new.",
-    );
-  }
-}
-
 /** Confirm a goal belongs to the signed-in user; returns it or throws. */
 async function assertGoalOwned(goalId: string, userId: string) {
   const goal = await prisma.goal.findFirst({
@@ -645,10 +632,15 @@ export async function shareSubtask(
     if (already) return;
 
     const isMonthly = original.goal.monthId != null;
+    // A submitted period still takes delegations: leads submit every week and
+    // stay locked until the next one, so refusing made them unreachable. The
+    // lock only freezes what they wrote; the copy arrives marked "From X" and
+    // they're notified.
     const recipientPeriod = isMonthly
       ? await getOrCreateCurrentMonth(toUserId)
       : await getOrCreateCurrentWeek(toUserId);
-    assertRecipientPeriodOpen(recipientPeriod);
+
+    const senderName = await displayNameOf(fromUserId);
 
     // Find a goal with the same title in the recipient's period, or create one.
     const existingGoal = recipientPeriod.goals.find(
@@ -693,6 +685,12 @@ export async function shareSubtask(
           },
         },
       });
+      await notify(
+        tx,
+        toUserId,
+        "TASK_ASSIGNED",
+        `${senderName} delegated a task to you: “${original.title}” (under “${original.goal.title}”).`,
+      );
     });
 
     revalidatePath("/dashboard");
@@ -731,10 +729,10 @@ export async function shareGoal(
     if (already) return;
 
     const isMonthly = original.monthId != null;
+    // Submitted periods take it too (see shareSubtask).
     const recipientPeriod = isMonthly
       ? await getOrCreateCurrentMonth(toUserId)
       : await getOrCreateCurrentWeek(toUserId);
-    assertRecipientPeriodOpen(recipientPeriod);
 
     const sender = await prisma.user.findUnique({
       where: { id: fromUserId },
